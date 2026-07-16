@@ -1,0 +1,1 @@
+[{"name":"immich@docker","loadBalancer":{"servers":[{"url":"http://immich-server:2283"}]}}]

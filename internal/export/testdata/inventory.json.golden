@@ -1,0 +1,86 @@
+{
+  "schema_version": "homedex.inventory.v1",
+  "hosts": [
+    {
+      "id": 1,
+      "name": "nas",
+      "kind": "docker",
+      "address": "10.0.0.2",
+      "os": "Linux",
+      "arch": "amd64",
+      "state": "active",
+      "first_seen": "2026-01-01T00:00:00Z",
+      "last_seen": "2026-01-02T00:00:00Z",
+      "notes": "main rack"
+    }
+  ],
+  "services": [
+    {
+      "id": 2,
+      "host_id": 1,
+      "host": "nas",
+      "name": "photos",
+      "kind": "container",
+      "stack": "media",
+      "image": "ghcr.io/example/photos",
+      "tag": "v1",
+      "state": "running",
+      "labels": {
+        "com.example.api-token": "[REDACTED]",
+        "purpose": "[REDACTED]"
+      },
+      "first_seen": "2026-01-01T00:00:00Z",
+      "last_seen": "2026-01-02T00:00:00Z",
+      "notes": "See photos.example.com and 8.8.8.8",
+      "tags": [
+        {
+          "name": "media",
+          "color": ""
+        }
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "id": 3,
+      "service_id": 2,
+      "service": "photos",
+      "host_id": 1,
+      "host": "nas",
+      "number": 2283,
+      "protocol": "tcp",
+      "published": true,
+      "host_ip": "0.0.0.0",
+      "container_port": 2283,
+      "source": "docker"
+    }
+  ],
+  "routes": [
+    {
+      "id": 4,
+      "domain": "photos.example.com",
+      "path_prefix": "/",
+      "proxy": "caddy",
+      "upstream_host": "10.0.0.2",
+      "upstream_port": 2283,
+      "resolved_service_id": 2,
+      "service": "photos",
+      "resolve_confidence": "high",
+      "tls": true,
+      "status": "ok",
+      "state": "active"
+    }
+  ],
+  "expiry": [
+    {
+      "entity_type": "domain",
+      "id": 5,
+      "name": "photos.example.com",
+      "kind": "domain",
+      "authority": "Example Registrar",
+      "expires_at": "2027-01-01T00:00:00Z",
+      "source": "rdap",
+      "state": "active"
+    }
+  ]
+}

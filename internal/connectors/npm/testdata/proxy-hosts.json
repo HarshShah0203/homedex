@@ -1,0 +1,1 @@
+[{"id":7,"domain_names":["paperless.example.com"],"forward_host":"paperless","forward_port":8000,"forward_scheme":"http","certificate_id":4,"enabled":1,"locations":[{"path":"/socket","forward_host":"paperless-ws","forward_port":8001}]}]
