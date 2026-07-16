@@ -1,0 +1,1 @@
+[{"Id":"abc123","Names":["/media-jellyfin-1"],"Image":"jellyfin/jellyfin:10.9.11","ImageID":"sha256:deadbeef","Labels":{"com.docker.compose.project":"media","com.docker.compose.service":"jellyfin","traefik.enable":"true"}}]

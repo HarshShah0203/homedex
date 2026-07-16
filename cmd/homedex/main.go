@@ -15,6 +15,14 @@ import (
 	"time"
 
 	"github.com/HarshShah0203/homedex/internal/auth"
+	"github.com/HarshShah0203/homedex/internal/connectors"
+	"github.com/HarshShah0203/homedex/internal/connectors/caddy"
+	"github.com/HarshShah0203/homedex/internal/connectors/docker"
+	"github.com/HarshShah0203/homedex/internal/connectors/npm"
+	"github.com/HarshShah0203/homedex/internal/connectors/rdap"
+	"github.com/HarshShah0203/homedex/internal/connectors/tlsprobe"
+	"github.com/HarshShah0203/homedex/internal/connectors/traefik"
+	"github.com/HarshShah0203/homedex/internal/engine"
 	"github.com/HarshShah0203/homedex/internal/server"
 	"github.com/HarshShah0203/homedex/internal/store"
 )
@@ -38,7 +46,8 @@ func run() error {
 	}
 	// Initialize the encryption key at startup even before connector CRUD lands,
 	// so every installation has secure-at-rest primitives from its first boot.
-	if _, err := auth.LoadOrCreateSecretBox(*dataDir); err != nil {
+	box, err := auth.LoadOrCreateSecretBox(*dataDir)
+	if err != nil {
 		return fmt.Errorf("initialize instance key: %w", err)
 	}
 	ctx := context.Background()
@@ -48,7 +57,19 @@ func run() error {
 	}
 	defer st.Close()
 	broker := server.NewBroker()
-	handler := server.New(st, broker, server.Config{Version: version, NoAuth: envBool("HOMEDEX_NO_AUTH", false), SecureCookies: envBool("HOMEDEX_SECURE_COOKIES", false)})
+	registry := connectors.NewRegistry()
+	for _, c := range []connectors.Connector{docker.New(), traefik.New(), caddy.New(), npm.New(), tlsprobe.New(), rdap.New()} {
+		if err = registry.Register(c); err != nil {
+			return err
+		}
+	}
+	configs := store.NewConnectorConfigs(st, box)
+	applier := engine.New(st, broker)
+	runner := engine.NewRunner(st, configs, registry, applier)
+	appCtx, cancelApp := context.WithCancel(context.Background())
+	defer cancelApp()
+	go engine.NewScheduler(runner).Run(appCtx)
+	handler := server.New(st, broker, server.Config{Version: version, NoAuth: envBool("HOMEDEX_NO_AUTH", false), SecureCookies: envBool("HOMEDEX_SECURE_COOKIES", false), ConnectorConfigs: configs, Registry: registry, Runner: runner})
 	httpServer := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 60 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
@@ -60,10 +81,12 @@ func run() error {
 	select {
 	case sig := <-sigCh:
 		slog.Info("shutting down", "signal", sig)
+		cancelApp()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return httpServer.Shutdown(shutdownCtx)
 	case err := <-errCh:
+		cancelApp()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}

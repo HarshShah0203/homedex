@@ -35,4 +35,11 @@ func TestOpenAppliesMigrationAndPragmas(t *testing.T) {
 	if tables != 8 {
 		t.Fatalf("created %d core tables, want 8", tables)
 	}
+	var networks int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='service_networks'`).Scan(&networks); err != nil {
+		t.Fatal(err)
+	}
+	if networks != 1 {
+		t.Fatal("service_networks migration was not applied")
+	}
 }

@@ -39,8 +39,18 @@ type Service struct {
 	Tag           string
 	Digest        string
 	State         string
+	Health        string
 	RestartPolicy string
 	RawLabels     map[string]string
+	Networks      []ServiceNetwork
+}
+
+// ServiceNetwork is addressing metadata used to resolve proxy upstreams.
+// Environment variables are deliberately not represented anywhere in a snapshot.
+type ServiceNetwork struct {
+	Name    string   `json:"name"`
+	IP      string   `json:"ip"`
+	Aliases []string `json:"aliases"`
 }
 
 func (s Service) NaturalKey() string { return s.Key }
@@ -63,6 +73,7 @@ func (p Port) NaturalKey() string {
 type Route struct {
 	Key                string
 	ProxyID            *int64
+	ProxyHostKey       string
 	Domain             string
 	PathPrefix         string
 	UpstreamHost       string

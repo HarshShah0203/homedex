@@ -132,3 +132,53 @@ func TestPurgeGoneHonorsRetention(t *testing.T) {
 		t.Fatalf("gone service count=%d, want 0", count)
 	}
 }
+
+func TestApplyTreatsSameComposeIdentityAsRecreated(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, _ := st.CreateConnector(ctx, "docker", "Docker", nil)
+	a := New(st, nil)
+	host := domain.Host{Key: "host", Name: "nas", Kind: "docker"}
+	old := domain.Snapshot{Hosts: []domain.Host{host}, Services: []domain.Service{{Key: "container:old", HostKey: "host", Name: "app", Stack: "stack", State: "running"}}}
+	if _, _, err = a.Apply(ctx, id, old); err != nil {
+		t.Fatal(err)
+	}
+	old.Services[0].Key = "container:new"
+	_, changes, err := a.Apply(ctx, id, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changes != 1 {
+		t.Fatalf("changes=%d, want one recreated change", changes)
+	}
+	var count int
+	var key string
+	if err = st.DB().QueryRow(`SELECT COUNT(*),MAX(natural_key) FROM services WHERE name='app'`).Scan(&count, &key); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || key != "container:new" {
+		t.Fatalf("count=%d key=%q", count, key)
+	}
+}
+func TestApplyDoesNotCollapseComposeReplicas(t *testing.T) {
+	ctx := context.Background()
+	st, e := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer st.Close()
+	id, _ := st.CreateConnector(ctx, "docker", "Docker", nil)
+	snap := domain.Snapshot{Services: []domain.Service{{Key: "one", Name: "web", Stack: "app"}, {Key: "two", Name: "web", Stack: "app"}}}
+	if _, _, e = New(st, nil).Apply(ctx, id, snap); e != nil {
+		t.Fatal(e)
+	}
+	var count int
+	_ = st.DB().QueryRow(`SELECT COUNT(*) FROM services WHERE name='web'`).Scan(&count)
+	if count != 2 {
+		t.Fatalf("replica count=%d", count)
+	}
+}
