@@ -35,9 +35,12 @@ docker build --build-arg VERSION=local -t homedex:local .
 git status --short
 make check
 make smoke
+npx --prefix web playwright install chromium
+make test-e2e
 docker build --build-arg VERSION=next -t homedex:next .
 ./scripts/check-image-size.sh homedex:next
 ./scripts/smoke-container.sh homedex:next
+./scripts/check-npm-audit.sh
 docker compose -f demo/compose.yml up -d --build
 curl -fsS http://127.0.0.1:7377/api/health
 goreleaser check
@@ -48,10 +51,12 @@ Also verify:
 
 1. README implementation claims match the tagged code.
 2. Embedded frontend assets are current.
-3. Database backup/restore notes cover any migration change.
-4. Compose still uses the socket proxy and does not give Homedex the raw socket.
-5. The fake lab contains only fabricated names and no secret-like labels.
-6. Release notes call out migrations, security changes, and known UI limitations.
+3. Seeded production E2E runs against the Go-served embedded frontend, not Vite/demo fixtures.
+4. Database backup/restore notes cover any migration change.
+5. Compose still uses the socket proxy and does not give Homedex the raw socket.
+6. The runtime smoke proves the non-root/read-only guarantees and `ssh -V` prerequisite.
+7. The fake lab contains only fabricated names and no secret-like labels.
+8. Release notes call out migrations, security changes, dependency advisories, and known UI limitations.
 
 ## Tagging
 

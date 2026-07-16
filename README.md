@@ -86,7 +86,7 @@ These tools can be complementary. Homedex is not a topology visualizer, monitor,
 ## Deployment facts
 
 - One Go process, one HTTP port (`7377`), one SQLite database.
-- The container runs as distroless non-root with a read-only root filesystem; only `/data` is writable.
+- The container runs as distroless non-root with a read-only root filesystem; only `/data` is writable. Its minimal OpenSSH client supports `ssh://` Docker endpoints when a dedicated key and verified `known_hosts` directory are mounted read-only.
 - Compose drops Linux capabilities, sets `no-new-privileges`, isolates the socket proxy, and binds the UI to `127.0.0.1`.
 - There is no built-in TLS termination. Use a trusted reverse proxy and set `HOMEDEX_SECURE_COOKIES=true` for HTTPS deployments.
 - There is no telemetry or update checker. Outbound connections occur only for configured connectors, TLS targets, and RDAP lookups.
@@ -105,7 +105,7 @@ make smoke       # startup budget and seeded API smoke tests
 make image       # local distroless image
 ```
 
-CI runs Go tests with the race detector, `go vet`, frontend checks/tests/build, embedded-asset drift, mandatory export/share redaction tests, the no-environment-ingestion tripwire, fake-lab smoke, startup budget, Compose hardening assertions, container smoke, binary size, and image size.
+CI runs Go tests with the race detector, `go vet`, frontend checks/tests/build, production E2E against the seeded embedded UI/API, embedded-asset drift, dependency-advisory classification, mandatory export/share redaction tests, the no-environment-ingestion tripwire, fake-lab smoke, startup budget, Compose hardening assertions, container/OpenSSH smoke, binary size, and image size.
 
 Tagged releases are configured through [GoReleaser](.goreleaser.yml) for Linux, macOS, and Windows archives plus checksums/SBOMs. The release workflow builds `linux/amd64`, `linux/arm64`, and `linux/arm/v7` images for GHCR. See [docs/RELEASING.md](docs/RELEASING.md); do not assume an image tag exists until a corresponding GitHub release is published.
 
@@ -114,6 +114,7 @@ Tagged releases are configured through [GoReleaser](.goreleaser.yml) for Linux, 
 - [Docker socket proxy](docs/DOCKER_SOCKET_PROXY.md)
 - [Connector configuration](docs/CONNECTORS.md)
 - [Backup, restore, and data ownership](docs/BACKUP_AND_DATA.md)
+- [Frontend dependency security](docs/DEPENDENCY_SECURITY.md)
 - [Deployment security](docs/SECURITY_DEPLOYMENT.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Release process](docs/RELEASING.md)

@@ -79,7 +79,7 @@ First-run setup stores an Argon2id password hash. Successful setup/login creates
 
 ## Build and release
 
-The Dockerfile has separate Node, Go dependency, application build, seed build, and distroless runtime stages. BuildKit cache mounts keep npm, module, and Go build caches out of final layers. The final image contains only the application binary, CA certificates supplied by distroless, and an empty `/data` directory.
+The Dockerfile has separate Node, minimal OpenSSH-closure, Go dependency, application build, seed build, and distroless runtime stages. BuildKit cache mounts keep npm, module, and Go build caches out of final layers. The final image contains the application binary, distroless CA certificates, `ssh`/`ssh-keyscan` plus only their runtime libraries/configuration, an empty non-root SSH directory, and an empty `/data` directory.
 
 GoReleaser cross-compiles CGO-free archives. GitHub Actions separately uses Buildx/QEMU for multi-architecture OCI images. CI targets an uncompressed image size below 30 MiB and fails at 40 MiB.
 

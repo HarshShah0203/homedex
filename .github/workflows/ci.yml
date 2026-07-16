@@ -37,7 +37,7 @@ jobs:
         run: ./scripts/smoke-fake-lab.sh ./homedex
 
   frontend:
-    name: Frontend checks
+    name: Frontend and production E2E
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -49,13 +49,39 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
       - run: npm ci
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+      - name: Classify dependency advisories
+        working-directory: .
+        run: ./scripts/check-npm-audit.sh
       - run: npm run check
       - run: npm test
+      - name: Ensure generated asset directories are writable
+        working-directory: .
+        run: |
+          rm -rf web/dist
+          test -w internal/server/static
       - run: npm run build
       - name: Embedded assets are current
         working-directory: .
         run: git diff --exit-code -- internal/server/static
+      - name: Seeded production browser E2E
+        working-directory: .
+        env:
+          HOMEDEX_E2E_ARTIFACT_DIR: ${{ runner.temp }}/homedex-playwright
+        run: ./scripts/test-production-e2e.sh
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-production-e2e
+          path: ${{ runner.temp }}/homedex-playwright
+          if-no-files-found: ignore
 
   container:
     name: Container security and size

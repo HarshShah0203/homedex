@@ -57,6 +57,7 @@ archives:
       - SECURITY.md
       - docs/CONNECTORS.md
       - docs/BACKUP_AND_DATA.md
+      - docs/DEPENDENCY_SECURITY.md
 
 checksum:
   name_template: checksums.txt

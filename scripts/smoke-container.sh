@@ -29,4 +29,9 @@ case "$(docker inspect "$container" --format '{{.Config.User}}')" in
   *) echo "error: container is not configured as UID 65532" >&2; exit 1 ;;
 esac
 [ "$(docker inspect "$container" --format '{{.HostConfig.ReadonlyRootfs}}')" = "true" ]
-echo "container smoke: healthy as non-root with a read-only root filesystem"
+docker run --rm --entrypoint /usr/bin/ssh "$image" -V 2>&1 | grep -q '^OpenSSH_'
+docker run --rm --entrypoint /usr/bin/ssh "$image" -G \
+  -o BatchMode=yes -o StrictHostKeyChecking=yes \
+  -o UserKnownHostsFile=/home/nonroot/.ssh/known_hosts \
+  homedex@example.invalid 2>/dev/null | grep -q '^user homedex$'
+echo "container smoke: healthy as non-root with read-only rootfs and OpenSSH client"

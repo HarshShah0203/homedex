@@ -37,11 +37,35 @@ Supported endpoint forms:
 - `unix:///var/run/docker.sock` — native/raw socket; discouraged in containers because `:ro` is not an API boundary.
 - `tcp://host:2375` or `http://host:2375` — no transport authentication; restrict to a private network.
 - `https://host:2376` with `tls_verify`, `ca_cert`, and optional `client_cert`/`client_key` paths — mount certificate files read-only into the Homedex container.
-- `ssh://user@host` — supported by native binaries when an `ssh` executable and keys are available. The distroless Homedex image intentionally contains no SSH client, so this mode is not available in the stock container.
+- `ssh://user@host` — uses the system OpenSSH client. Native binaries use the operator's normal SSH setup; the stock container includes a minimal `ssh`/`ssh-keyscan` runtime and reads `/home/nonroot/.ssh`.
 
 `host_address` should be the address reverse proxies use when they target a host-published port; it enables medium-confidence route resolution.
 
 Read [DOCKER_SOCKET_PROXY.md](DOCKER_SOCKET_PROXY.md) before deviating from the Compose default.
+
+### Docker over SSH in the stock image
+
+Prepare a dedicated directory on the Docker host running Homedex. Generate the key outside the container, authorize only that public key on the remote account, and verify the server fingerprint out of band before accepting it:
+
+```sh
+sudo install -d -m 0700 -o 65532 -g 65532 /opt/homedex-ssh
+sudo install -m 0600 -o 65532 -g 65532 ./id_ed25519 /opt/homedex-ssh/id_ed25519
+ssh-keyscan -H docker-host.example.net > /var/tmp/homedex-known-hosts
+ssh-keygen -lf /var/tmp/homedex-known-hosts   # compare with the remote host's trusted fingerprint
+sudo install -m 0600 -o 65532 -g 65532 /var/tmp/homedex-known-hosts /opt/homedex-ssh/known_hosts
+```
+
+Do not populate `known_hosts` by disabling `StrictHostKeyChecking`, and do not put a private key in connector JSON or the database. Mount the directory read-only into the Homedex service:
+
+```yaml
+services:
+  homedex:
+    volumes:
+      - homedex-data:/data
+      - /opt/homedex-ssh:/home/nonroot/.ssh:ro
+```
+
+Then use an endpoint such as `ssh://homedex@docker-host.example.net`. OpenSSH enforces private-key permissions, so the files must be readable by container UID/GID `65532` but not group/world-readable. The remote account must be able to run `docker system dial-stdio`; membership in the remote `docker` group is effectively root-equivalent access to that host. Restrict the account/key at the SSH server where practical and allow Homedex egress only to the intended host on TCP 22.
 
 ## Traefik
 

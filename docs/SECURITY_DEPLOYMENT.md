@@ -51,10 +51,13 @@ Allow Homedex egress only to endpoints it needs:
 
 - internal socket proxies;
 - configured Traefik, Caddy, and NPM APIs;
+- configured Docker SSH hosts on TCP 22 when that connector mode is used;
 - configured TLS targets;
 - IANA and registry RDAP endpoints if RDAP is enabled.
 
 Do not expose Docker TCP 2375, Caddy 2019, Traefik's unauthenticated dashboard/API, or NPM's admin API to the public internet for Homedex. Use internal networks, firewall allowlists, private overlays, or mTLS as supported by the upstream.
+
+For Docker-over-SSH, mount the dedicated key and verified `known_hosts` file read-only at `/home/nonroot/.ssh`; never disable host-key verification. The corresponding remote account can reach the Docker daemon and is therefore privileged even though Homedex itself issues only inventory calls. See [the connector guide](CONNECTORS.md#docker-over-ssh-in-the-stock-image).
 
 ## Files and backups
 
