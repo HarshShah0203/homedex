@@ -54,7 +54,11 @@ func newProductServer(t *testing.T) (*store.Store, http.Handler, *productSender)
 	_ = registry.Register(productFixtureConnector{})
 	runner := engine.NewRunner(st, configs, registry, engine.New(st, nil))
 	sender := &productSender{}
-	notifications := notify.NewManager(st, sender)
+	notifications, err := notify.NewManager(ctx, st, box, sender)
+	if err != nil {
+		st.Close()
+		t.Fatal(err)
+	}
 	h := New(st, NewBroker(), Config{ConnectorConfigs: configs, Registry: registry, Runner: runner, Notifications: notifications})
 	return st, h, sender
 }
@@ -148,6 +152,14 @@ func TestEntityExpiryChangeAndNotificationVerticalAPIs(t *testing.T) {
 	rec = admin.request(http.MethodPost, "/api/notify/rules", `{"name":"Warranty expiry","kind":"expiry","threshold_days":14,"channels":["ntfy://notify.example/topic?token=hidden"]}`, true)
 	if rec.Code != http.StatusCreated || strings.Contains(rec.Body.String(), "hidden") || !strings.Contains(rec.Body.String(), `"channels":["ntfy"]`) {
 		t.Fatalf("create notification status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var legacyChannels string
+	var encryptedChannels []byte
+	if queryErr := st.DB().QueryRow(`SELECT channels,channels_encrypted FROM notification_rules WHERE id=1`).Scan(&legacyChannels, &encryptedChannels); queryErr != nil {
+		t.Fatal(queryErr)
+	}
+	if legacyChannels != "[]" || len(encryptedChannels) == 0 || bytes.Contains(encryptedChannels, []byte("hidden")) {
+		t.Fatalf("API persisted notification credentials in plaintext: legacy=%q ciphertext=%q", legacyChannels, encryptedChannels)
 	}
 	rec = admin.request(http.MethodPost, "/api/notify/rules/1/test", `{}`, true)
 	if rec.Code != http.StatusOK || len(sender.messages) != 1 {

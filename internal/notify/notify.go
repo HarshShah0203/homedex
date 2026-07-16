@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HarshShah0203/homedex/internal/auth"
 	"github.com/HarshShah0203/homedex/internal/export"
 	"github.com/HarshShah0203/homedex/internal/store"
 	"github.com/containrrr/shoutrrr"
@@ -60,24 +61,155 @@ type Manager struct {
 	store  *store.Store
 	sender Sender
 	now    func() time.Time
+	box    *auth.SecretBox
 }
 
-func NewManager(s *store.Store, sender Sender) *Manager {
+// NewManager validates every encrypted notification destination before the
+// manager becomes available. Rules created before destination encryption was
+// introduced are encrypted and scrubbed transactionally during this startup.
+func NewManager(ctx context.Context, s *store.Store, box *auth.SecretBox, sender Sender) (*Manager, error) {
+	if s == nil {
+		return nil, errors.New("notification store is required")
+	}
+	if box == nil {
+		return nil, errors.New("notification SecretBox is required")
+	}
 	if sender == nil {
 		sender = ShoutrrrSender{}
 	}
-	return &Manager{store: s, sender: sender, now: time.Now}
+	m := &Manager{store: s, box: box, sender: sender, now: time.Now}
+	if err := m.migrateAndValidateDestinations(ctx); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+type destinationRecord struct {
+	id        int64
+	legacy    string
+	encrypted []byte
+}
+
+// migrateAndValidateDestinations is deliberately run before HTTP and scan
+// goroutines start. A wrong restored key or damaged ciphertext fails startup;
+// Homedex never replaces unreadable destinations or silently disables rules.
+func (m *Manager) migrateAndValidateDestinations(ctx context.Context) error {
+	conn, err := m.store.DB().Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open notification secret migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, `PRAGMA secure_delete=ON`); err != nil {
+		return fmt.Errorf("enable secure notification secret deletion: %w", err)
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin notification secret migration: %w", err)
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id,channels,channels_encrypted FROM notification_rules ORDER BY id`)
+	if err != nil {
+		return fmt.Errorf("read notification destinations: %w", err)
+	}
+	records := []destinationRecord{}
+	for rows.Next() {
+		var record destinationRecord
+		if err = rows.Scan(&record.id, &record.legacy, &record.encrypted); err != nil {
+			rows.Close()
+			return fmt.Errorf("read notification destination: %w", err)
+		}
+		records = append(records, record)
+	}
+	if err = rows.Close(); err != nil {
+		return fmt.Errorf("close notification destination rows: %w", err)
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("read notification destinations: %w", err)
+	}
+	scrubbedPlaintext := false
+	for _, record := range records {
+		encrypted := record.encrypted
+		if len(encrypted) == 0 {
+			channels, decodeErr := decodeChannels([]byte(record.legacy))
+			if decodeErr != nil {
+				return fmt.Errorf("decode legacy notification rule %d destinations: %w", record.id, decodeErr)
+			}
+			encrypted, err = m.encryptChannels(channels)
+			if err != nil {
+				return fmt.Errorf("encrypt legacy notification rule %d destinations: %w", record.id, err)
+			}
+		} else if _, err = m.decryptChannels(encrypted); err != nil {
+			return fmt.Errorf("decrypt notification rule %d destinations: %w", record.id, err)
+		}
+		legacy := strings.TrimSpace(record.legacy)
+		if legacy != "" && legacy != "[]" && legacy != "null" {
+			scrubbedPlaintext = true
+		}
+		if len(record.encrypted) == 0 || legacy != "[]" {
+			if _, err = tx.ExecContext(ctx, `UPDATE notification_rules SET channels='[]',channels_encrypted=? WHERE id=?`, encrypted, record.id); err != nil {
+				return fmt.Errorf("store encrypted notification rule %d destinations: %w", record.id, err)
+			}
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit notification secret migration: %w", err)
+	}
+	if scrubbedPlaintext {
+		// Rebuild and checkpoint after upgrading legacy rows so destination
+		// credentials do not remain in free pages or a stale WAL frame.
+		if _, err = conn.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+			return fmt.Errorf("checkpoint notification secret migration: %w", err)
+		}
+		if _, err = conn.ExecContext(ctx, `VACUUM`); err != nil {
+			return fmt.Errorf("compact notification secret migration: %w", err)
+		}
+		if _, err = conn.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+			return fmt.Errorf("finalize notification secret migration: %w", err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) encryptChannels(channels []string) ([]byte, error) {
+	plain, err := json.Marshal(channels)
+	if err != nil {
+		return nil, fmt.Errorf("encode notification destinations: %w", err)
+	}
+	encrypted, err := m.box.Seal(plain)
+	if err != nil {
+		return nil, fmt.Errorf("encrypt notification destinations: %w", err)
+	}
+	return encrypted, nil
+}
+
+func (m *Manager) decryptChannels(encrypted []byte) ([]string, error) {
+	plain, err := m.box.Open(encrypted)
+	if err != nil {
+		return nil, err
+	}
+	return decodeChannels(plain)
+}
+
+func decodeChannels(encoded []byte) ([]string, error) {
+	var channels []string
+	if err := json.Unmarshal(encoded, &channels); err != nil {
+		return nil, fmt.Errorf("decode notification destinations: %w", err)
+	}
+	if channels == nil {
+		channels = []string{}
+	}
+	return channels, nil
 }
 
 func (m *Manager) List(ctx context.Context) ([]Rule, error) {
-	rows, err := m.store.DB().QueryContext(ctx, `SELECT id,name,kind,threshold_days,filters,channels,enabled,created_at,updated_at FROM notification_rules ORDER BY id`)
+	rows, err := m.store.DB().QueryContext(ctx, `SELECT id,name,kind,threshold_days,filters,channels_encrypted,enabled,created_at,updated_at FROM notification_rules ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	rules := []Rule{}
 	for rows.Next() {
-		rule, err := scanRule(rows)
+		rule, err := m.scanRule(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -95,9 +227,12 @@ func (m *Manager) Create(ctx context.Context, input RuleInput) (Rule, error) {
 		enabled = *input.Enabled
 	}
 	filters, _ := json.Marshal(defaultFilters(input.Filters))
-	channels, _ := json.Marshal(input.Channels)
+	channels, err := m.encryptChannels(input.Channels)
+	if err != nil {
+		return Rule{}, err
+	}
 	now := m.now().UTC().Format(time.RFC3339Nano)
-	result, err := m.store.DB().ExecContext(ctx, `INSERT INTO notification_rules(name,kind,threshold_days,filters,channels,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, input.Name, input.Kind, input.ThresholdDays, string(filters), string(channels), enabled, now, now)
+	result, err := m.store.DB().ExecContext(ctx, `INSERT INTO notification_rules(name,kind,threshold_days,filters,channels,channels_encrypted,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, input.Name, input.Kind, input.ThresholdDays, string(filters), "[]", channels, enabled, now, now)
 	if err != nil {
 		return Rule{}, err
 	}
@@ -133,8 +268,11 @@ func (m *Manager) Update(ctx context.Context, id int64, input RuleInput) (Rule, 
 		return Rule{}, err
 	}
 	filters, _ := json.Marshal(input.Filters)
-	channels, _ := json.Marshal(input.Channels)
-	result, err := m.store.DB().ExecContext(ctx, `UPDATE notification_rules SET name=?,kind=?,threshold_days=?,filters=?,channels=?,enabled=?,updated_at=? WHERE id=?`, input.Name, input.Kind, input.ThresholdDays, string(filters), string(channels), *input.Enabled, m.now().UTC().Format(time.RFC3339Nano), id)
+	channels, err := m.encryptChannels(input.Channels)
+	if err != nil {
+		return Rule{}, err
+	}
+	result, err := m.store.DB().ExecContext(ctx, `UPDATE notification_rules SET name=?,kind=?,threshold_days=?,filters=?,channels='[]',channels_encrypted=?,enabled=?,updated_at=? WHERE id=?`, input.Name, input.Kind, input.ThresholdDays, string(filters), channels, *input.Enabled, m.now().UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return Rule{}, err
 	}
@@ -243,6 +381,7 @@ func (m *Manager) deliverOnce(ctx context.Context, rule Rule, baseKey, message s
 		err = m.sender.Send(ctx, target, message)
 		errorText := ""
 		if err != nil {
+			err = maskedDeliveryError(target)
 			errorText = err.Error()
 		}
 		_, _ = m.store.DB().ExecContext(context.WithoutCancel(ctx), `UPDATE notification_deliveries SET error=? WHERE rule_id=? AND dedupe_key=?`, errorText, rule.ID, key)
@@ -257,14 +396,18 @@ func (m *Manager) send(ctx context.Context, channels []string, message string) e
 	var errs []error
 	for _, target := range channels {
 		if err := m.sender.Send(ctx, target, message); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, maskedDeliveryError(target))
 		}
 	}
 	return errors.Join(errs...)
 }
 
+func maskedDeliveryError(target string) error {
+	return fmt.Errorf("%s notification delivery failed", channelLabel(target))
+}
+
 func (m *Manager) get(ctx context.Context, id int64) (Rule, error) {
-	return scanRule(m.store.DB().QueryRowContext(ctx, `SELECT id,name,kind,threshold_days,filters,channels,enabled,created_at,updated_at FROM notification_rules WHERE id=?`, id))
+	return m.scanRule(m.store.DB().QueryRowContext(ctx, `SELECT id,name,kind,threshold_days,filters,channels_encrypted,enabled,created_at,updated_at FROM notification_rules WHERE id=?`, id))
 }
 
 func (m *Manager) enabledRules(ctx context.Context) ([]Rule, error) {
@@ -283,22 +426,29 @@ func (m *Manager) enabledRules(ctx context.Context) ([]Rule, error) {
 
 type scanner interface{ Scan(...any) error }
 
-func scanRule(row scanner) (Rule, error) {
+func (m *Manager) scanRule(row scanner) (Rule, error) {
 	var rule Rule
 	var threshold sql.NullInt64
-	var filters, channels string
-	if err := row.Scan(&rule.ID, &rule.Name, &rule.Kind, &threshold, &filters, &channels, &rule.Enabled, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
+	var filters string
+	var encrypted []byte
+	if err := row.Scan(&rule.ID, &rule.Name, &rule.Kind, &threshold, &filters, &encrypted, &rule.Enabled, &rule.CreatedAt, &rule.UpdatedAt); err != nil {
 		return rule, err
 	}
 	if threshold.Valid {
 		value := int(threshold.Int64)
 		rule.ThresholdDays = &value
 	}
-	_ = json.Unmarshal([]byte(filters), &rule.Filters)
+	if err := json.Unmarshal([]byte(filters), &rule.Filters); err != nil {
+		return rule, fmt.Errorf("decode notification rule %d filters: %w", rule.ID, err)
+	}
 	if rule.Filters == nil {
 		rule.Filters = map[string]any{}
 	}
-	_ = json.Unmarshal([]byte(channels), &rule.channelURLs)
+	channels, err := m.decryptChannels(encrypted)
+	if err != nil {
+		return rule, fmt.Errorf("decrypt notification rule %d destinations: %w", rule.ID, err)
+	}
+	rule.channelURLs = channels
 	rule.ChannelCount = len(rule.channelURLs)
 	for _, target := range rule.channelURLs {
 		rule.Channels = append(rule.Channels, channelLabel(target))

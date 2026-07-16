@@ -26,7 +26,7 @@ The socket proxy narrows the API surface; it does not make the Docker daemon or 
 - Connector credentials have the privileges granted by the upstream system. Use dedicated least-privilege accounts and network ACLs even though Homedex's code path is retrieval-only.
 - Caddy's admin endpoint is a powerful management interface. Homedex only reads `/config/`, but the endpoint itself must remain isolated from untrusted clients.
 - Nginx Proxy Manager versions differ in account/role granularity. A dedicated account is still recommended, but do not call it read-only unless your NPM deployment actually enforces that role.
-- Notification channel URLs can contain delivery credentials. API list responses expose only channel kinds, but the URLs are stored in SQLite; protect `/data` and its backups accordingly.
+- Notification channel URLs can contain delivery credentials. API list responses expose only channel kinds, and destination URLs are authenticated-encrypted in SQLite with the instance SecretBox. Protect `/data`, the matching key, and backups; changing or losing the key makes encrypted connector and notification credentials unreadable.
 - Raw Docker labels, connector errors, database backups, and the infrastructure graph may be sensitive. Limit filesystem and UI access accordingly.
 - Homedex serves plain HTTP. TLS, trusted proxy configuration, host firewalling, backup encryption, and operating-system patching remain deployment responsibilities.
 

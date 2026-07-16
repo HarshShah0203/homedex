@@ -13,7 +13,7 @@ The default Compose stack stores this directory in the `homedex_homedex-data` na
 
 ## What must be backed up
 
-Back up the entire data directory, including `instance.key`. The database contains inventory, password/session/share-token hashes, changes, encrypted connector configs, notification rules, and notification channel URLs that may embed delivery credentials. Treat the database as sensitive. Without the matching key, encrypted connector config cannot be recovered.
+Back up the entire data directory, including `instance.key`. The database contains inventory, password/session/share-token hashes, changes, encrypted connector configs, and notification rules whose destination URLs are encrypted because they may embed delivery credentials. Treat the database as sensitive. Without the matching key, encrypted connector configs and notification destinations cannot be recovered.
 
 If `HOMEDEX_SECRET` supplies the key, it is not written to `/data`; back it up separately in your secret manager. `HOMEDEX_SECRET` is base64 for exactly 32 bytes. Do not store it in the same unencrypted archive as the database if that defeats your threat model.
 
@@ -52,7 +52,7 @@ docker compose up -d
 curl -fsS http://127.0.0.1:7377/api/health
 ```
 
-If the backup used `HOMEDEX_SECRET`, restore that exact secret before startup. If file ownership was changed by another backup tool, ensure UID/GID `65532` (the distroless non-root user) can read and write the restored volume.
+If the backup used `HOMEDEX_SECRET`, restore that exact secret before startup. Homedex validates encrypted notification destinations at startup and fails closed when the restored key is wrong rather than overwriting or disabling rules. In-place `HOMEDEX_SECRET` rotation is not supported in v0.1; retain the current key until a coordinated connector-and-notification re-encryption workflow is available. If file ownership was changed by another backup tool, ensure UID/GID `65532` (the distroless non-root user) can read and write the restored volume.
 
 ## Upgrades and rollback
 

@@ -64,7 +64,10 @@ func run() error {
 	}
 	configs := store.NewConnectorConfigs(st, box)
 	applier := engine.New(st, broker)
-	notifications := notify.NewManager(st, notify.ShoutrrrSender{})
+	notifications, err := notify.NewManager(ctx, st, box, notify.ShoutrrrSender{})
+	if err != nil {
+		return fmt.Errorf("initialize notification secrets: %w", err)
+	}
 	applier.SetRuleEvaluator(notifications)
 	runner := engine.NewRunner(st, configs, registry, applier)
 	appCtx, cancelApp := context.WithCancel(context.Background())

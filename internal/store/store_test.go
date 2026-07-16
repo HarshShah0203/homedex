@@ -49,4 +49,27 @@ func TestOpenAppliesMigrationAndPragmas(t *testing.T) {
 	if productTables != 3 {
 		t.Fatalf("created %d product tables, want 3", productTables)
 	}
+	var encryptedChannelsColumn int
+	rows, err := s.DB().Query(`PRAGMA table_info(notification_rules)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, kind string
+		var defaultValue any
+		if err = rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		if name == "channels_encrypted" && kind == "BLOB" && notNull == 1 {
+			encryptedChannelsColumn++
+		}
+	}
+	if err = rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if encryptedChannelsColumn != 1 {
+		t.Fatal("encrypted notification destination migration was not applied")
+	}
 }
