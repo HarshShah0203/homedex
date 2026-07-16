@@ -34,7 +34,9 @@ test('renders every approved register and both route evidence outcomes', async (
   await page.goto('/copy-my-lab');
   await expect(page.getByText('Mandatory safety receipt')).toBeVisible();
   await expect(page.getByText('NEVER INGESTED')).toBeVisible();
-  await expect(page.getByText('6A9D 4E3B 78C1 … 2F10')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Homedex lab context', level: 2 })).toBeVisible();
+  await expect(page.getByText('SCHEMA HOMEDEX.INVENTORY.V1')).toBeVisible();
+  await expect(page.locator('.receipt-line').filter({ hasText: 'SHA-256' }).locator('span').last()).toHaveText(/^[A-F0-9]{4} [A-F0-9]{4} [A-F0-9]{4} … [A-F0-9]{4}$/);
 });
 
 test('opens grouped cmd-K search with explicit match reasons and mobile fullscreen behavior', async ({ page }) => {

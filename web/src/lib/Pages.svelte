@@ -13,14 +13,23 @@
 
   let { path, inventory }: { path: string; inventory: Inventory } = $props();
   let pathname = $derived(path.split('?')[0]);
+  let issueSummary = $derived(inventory.issues.map((issue) => `${issue.resource}: ${issue.message}`).join(' '));
 </script>
+
+{#if inventory.source === 'demo'}
+  <div class="summary-line" role="status"><strong>Development demo inventory</strong><span>{inventory.error || 'The API returned no records, so local fixture data is shown only in this development build.'}</span></div>
+{:else if inventory.readOnly}
+  <div class="summary-line" role="status"><strong>Read-only shared inventory</strong><span>Settings and all mutation controls are unavailable.</span></div>
+{:else if inventory.issues.length}
+  <div class="summary-line" role="alert"><strong>{inventory.issues.length === 1 ? 'Inventory resource unavailable' : 'Partial inventory loaded'}</strong><span>{issueSummary}</span></div>
+{/if}
 
 {#if pathname === '/' || pathname === '/index'}
   <IndexPage {inventory} />
 {:else if pathname.startsWith('/hosts')}
   <HostsPage {path} {inventory} />
 {:else if pathname.startsWith('/routes')}
-  <RoutePage {path} />
+  <RoutePage {path} {inventory} />
 {:else if pathname === '/ports'}
   <PortsPage {inventory} />
 {:else if pathname === '/expiry'}

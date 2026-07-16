@@ -1,8 +1,17 @@
-import * as demo from './demo';
-import type { Change, Connector, Expiry, Host, Port, Route, Service } from './types';
+import { createDemoInventory } from './demo';
+import type { Change, Connector, ConnectorInput, ConnectorMutation, ConnectorTest, ContextCounts, ContextExport, Expiry, Host, Inventory, InventoryIssue, InventoryIssueKind, InventoryResource, Port, Route, ScanRun, Service } from './types';
+
+export type { Inventory } from './types';
 
 type ListResponse<T> = { items: T[]; total: number };
-export type Inventory = { services: Service[]; hosts: Host[]; ports: Port[]; routes: Route[]; changes: Change[]; expiries: Expiry[]; connectors: Connector[]; source: 'api' | 'demo'; error?: string };
+const CONTEXT_LIMIT_BYTES = 100 * 1024;
+const CORE_RESOURCES: InventoryResource[] = ['services', 'hosts', 'ports', 'routes', 'changes', 'expiry'];
+
+class APIError extends Error {
+  constructor(public resource: InventoryResource | string, public status: number, message: string) {
+    super(message);
+  }
+}
 
 export async function getSetupStatus(): Promise<{ configured: boolean; auth_disabled: boolean }> {
   const response = await fetch('/api/setup/status', { headers: { Accept: 'application/json' } });
@@ -19,43 +28,197 @@ export async function login(password: string): Promise<void> {
 
 async function list<T>(path: string): Promise<T[]> {
   const response = await fetch(`/api/${path}?limit=500`, { headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(response.status === 401 ? 'Sign in is required to load this inventory.' : `The ${path} API returned ${response.status}.`);
+  if (!response.ok) throw new APIError(path, response.status, response.status === 401 ? 'Sign in is required to load this inventory.' : response.status === 403 ? `The ${path} resource is not available in this read-only view.` : `The ${path} API returned ${response.status}.`);
   return ((await response.json()) as ListResponse<T>).items ?? [];
 }
 
 export async function loadInventory(options: { demoOnEmpty?: boolean } = {}): Promise<Inventory> {
-  try {
-    const [rawServices, rawHosts, rawPorts, rawRoutes, rawChanges, certs, domains, connectors] = await Promise.all([
-      list<Service>('services'), list<Host>('hosts'), list<Port>('ports'), list<Route>('routes'), list<Change>('changes'),
-      list<Record<string, unknown>>('certs'), list<Record<string, unknown>>('domains'), list<Connector>('connectors')
-    ]);
-    const demoOnEmpty = options.demoOnEmpty ?? import.meta.env.DEV;
-    if (demoOnEmpty && !rawServices.length && !rawHosts.length && !rawPorts.length && !rawRoutes.length && !connectors.length) {
-      return { services: demo.services, hosts: demo.hosts, ports: demo.ports, routes: demo.routes, changes: demo.changes, expiries:demo.expiries, connectors:demo.connectors, source: 'demo' };
+  const requests = [
+    list<Service>('services'), list<Host>('hosts'), list<Port>('ports'), list<Route>('routes'), list<Change>('changes'),
+    list<Expiry>('expiry'), list<Connector>('connectors')
+  ] as const;
+  const results = await Promise.allSettled(requests);
+  const issues: InventoryIssue[] = [];
+  let readOnly = false;
+  const values = results.map((result, index) => {
+    if (result.status === 'fulfilled') return result.value;
+    const resource = [...CORE_RESOURCES, 'connectors' as const][index];
+    const issue = inventoryIssue(resource, result.reason);
+    if (resource === 'connectors' && issue.status === 403) {
+      readOnly = true;
+    } else {
+      issues.push(issue);
     }
-    const hostById = new Map(rawHosts.map(h => [h.id, h.name]));
-    const serviceById = new Map(rawServices.map(s => [s.id, s.name]));
-    return {
-      services: rawServices.map(s => ({ ...s, host: hostById.get(s.host_id ?? 0) ?? 'Unknown host', ports: 'Discovered', route: '—', stack: s.stack || 'standalone', last_seen: s.last_seen || 'just now' })),
-      hosts: rawHosts,
-      ports: rawPorts.map(p => ({ ...p, published: Boolean(p.published), host: hostById.get(p.host_id), service: serviceById.get(p.service_id) })),
-      routes: rawRoutes.map(r => ({ ...r, tls: Boolean(r.tls), proxy: 'Discovered proxy', service: r.status === 'broken' ? 'No service found' : r.upstream_host })),
-      changes: rawChanges,
-      expiries: [
-        ...certs.map((cert,index)=>toExpiry(cert,index,'TLS certificate')),
-        ...domains.map((domain,index)=>toExpiry(domain,certs.length+index,'Domain'))
-      ].sort((a,b)=>(a.days??Number.MAX_SAFE_INTEGER)-(b.days??Number.MAX_SAFE_INTEGER)),
-      connectors,
-      source: 'api'
-    };
-  } catch (error) {
-    return { services: demo.services, hosts: demo.hosts, ports: demo.ports, routes: demo.routes, changes: demo.changes, expiries:demo.expiries, connectors:demo.connectors, source: 'demo', error: error instanceof Error ? error.message : 'Inventory could not be loaded.' };
+    return [];
+  });
+  const [services, hosts, ports, routes, changes, expiries, connectors] = values as [Service[], Host[], Port[], Route[], Change[], Expiry[], Connector[]];
+  const coreResults = results.slice(0, CORE_RESOURCES.length);
+  const demoOnEmpty = options.demoOnEmpty ?? import.meta.env.DEV;
+  const allCoreEmpty = [services, hosts, ports, routes, changes, expiries].every((items) => items.length === 0);
+  const allCoreSucceeded = coreResults.every((result) => result.status === 'fulfilled');
+  const allCoreFailed = coreResults.every((result) => result.status === 'rejected');
+  const coreIssues = issues.filter((issue) => CORE_RESOURCES.includes(issue.resource));
+  const allCoreOffline = allCoreFailed && coreIssues.length === CORE_RESOURCES.length && coreIssues.every((issue) => issue.kind === 'offline');
+  if (demoOnEmpty && !readOnly && allCoreEmpty && (allCoreSucceeded || allCoreOffline)) {
+    const error = allCoreFailed ? issues.map((issue) => issue.message).join(' ') : undefined;
+    return createDemoInventory(error);
+  }
+  return { services, hosts, ports, routes, changes, expiries, connectors, source: 'api', readOnly, issues, ...(issues[0] ? { error: issues[0].message } : {}) };
+}
+
+export function createEmptyInventory(): Inventory {
+  return { services: [], hosts: [], ports: [], routes: [], changes: [], expiries: [], connectors: [], source: 'api', readOnly: false, issues: [] };
+}
+
+export async function loadContextExport(): Promise<ContextExport> {
+  const response = await fetch('/api/export/context?include_private=false', { headers: { Accept: 'text/markdown' } });
+  if (!response.ok) throw new Error(`The context export API returned ${response.status}.`);
+
+  const body = await response.arrayBuffer();
+  const markdown = new TextDecoder().decode(body);
+  const bytes = body.byteLength;
+  const sha256 = await digest(body);
+
+  return {
+    markdown,
+    bytes,
+    size: formatBytes(bytes),
+    filename: response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] ?? 'homedex-context.md',
+    title: markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? 'Homedex lab context',
+    schema: markdown.match(/^Schema:\s*`([^`]+)`/m)?.[1] ?? 'unknown',
+    counts: contextCounts(markdown),
+    truncation: truncation(response.headers.get('X-Homedex-Truncation')),
+    sha256,
+    shortSha256: `${groupHex(sha256.slice(0, 12))} … ${sha256.slice(-4)}`
+  };
+}
+
+export async function testConnector(input: ConnectorInput): Promise<ConnectorTest> {
+  return requestJSON('/api/connectors/test', { method: 'POST', body: input });
+}
+
+export async function createConnector(input: ConnectorInput): Promise<ConnectorMutation> {
+  // Connector creation persists the source before its first scan. The server
+  // deliberately returns the persisted record with 502 when that scan fails,
+  // so callers must retain the ID and offer a retry instead of creating a
+  // duplicate source.
+  return requestJSON('/api/connectors', { method: 'POST', body: input, acceptedStatuses: [502] });
+}
+
+export async function updateConnector(id: number, input: Partial<ConnectorInput>): Promise<ConnectorMutation> {
+  return requestJSON(`/api/connectors/${id}`, { method: 'PATCH', body: input });
+}
+
+export async function deleteConnector(id: number): Promise<void> {
+  await requestJSON(`/api/connectors/${id}`, { method: 'DELETE' });
+}
+
+export async function testSavedConnector(id: number): Promise<ConnectorTest> {
+  return requestJSON(`/api/connectors/${id}/test`, { method: 'POST' });
+}
+
+export async function scanConnector(id: number): Promise<{ status: string; scan_run_id: number; changes: number }> {
+  return requestJSON(`/api/connectors/${id}/scan`, { method: 'POST' });
+}
+
+export async function loadConnectorScans(id: number): Promise<ScanRun[]> {
+  const response = await requestJSON<ListResponse<Omit<ScanRun, 'stats'> & { stats: Record<string, number> | string }>>(`/api/connectors/${id}/scans`);
+  return (response.items ?? []).map((run) => ({ ...run, stats: typeof run.stats === 'string' ? parseStats(run.stats) : run.stats ?? {} }));
+}
+
+export async function reviewChange(id: number, seen: boolean, note?: string): Promise<void> {
+  await requestJSON(`/api/changes/${id}`, { method: 'PATCH', body: { seen, ...(note === undefined ? {} : { note }) } });
+}
+
+export async function reviewChanges(ids: number[], seen: boolean): Promise<void> {
+  await requestJSON('/api/changes', { method: 'PATCH', body: { ids, seen } });
+}
+
+export async function loadNextFreePort(hostID: number, start = 1024, end = 65535, protocol = 'tcp'): Promise<number> {
+  const params = new URLSearchParams({ host_id: String(hostID), start: String(start), end: String(end), protocol });
+  const response = await requestJSON<{ port: number }>(`/api/ports/next-free?${params}`);
+  return response.port;
+}
+
+type RequestOptions = { method?: string; body?: unknown; acceptedStatuses?: number[] };
+
+async function requestJSON<T = void>(path: string, options: RequestOptions = {}): Promise<T> {
+  const method = options.method ?? 'GET';
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  const csrf = typeof sessionStorage === 'undefined' ? '' : sessionStorage.getItem('homedex-csrf') ?? '';
+  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrf) headers['X-Homedex-CSRF'] = csrf;
+  const response = await fetch(path, { method, headers, ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }) });
+  if (!response.ok && !options.acceptedStatuses?.includes(response.status)) {
+    const message = (await response.text()).trim() || `The request returned ${response.status}.`;
+    throw new APIError(path, response.status, message);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
+function inventoryIssue(resource: InventoryResource, reason: unknown): InventoryIssue {
+  if (reason instanceof APIError) return { resource, status: reason.status, kind: issueKind(reason.status), message: reason.message };
+  const message = reason instanceof Error ? reason.message : 'The resource could not be loaded.';
+  return { resource, status: 0, kind: 'offline', message };
+}
+
+function issueKind(status: number): InventoryIssueKind {
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 0) return 'offline';
+  if (status >= 500) return 'server';
+  return 'invalid';
+}
+
+function parseStats(value: string): Record<string, number> {
+  try {
+    return JSON.parse(value) as Record<string, number>;
+  } catch {
+    return {};
   }
 }
 
-function toExpiry(item:Record<string,unknown>, index:number, type:string):Expiry {
-  const rawDate=String(item.not_after??item.expires_at??'');
-  const date=rawDate?new Date(rawDate):null;
-  const days=date&&Number.isFinite(date.getTime())?Math.ceil((date.getTime()-Date.now())/86_400_000):null;
-  return { id:Number(item.id??index+1),name:String(item.subject??item.name??'Unknown'),type,authority:String(item.issuer??item.registrar??item.source??'Unknown'),expires:date?date.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}):'Unknown',days,status:days===null?'Unknown':days<=14?'Action needed':days<=30?'Renew soon':'Healthy',checked:String(item.last_checked??'Recently') };
+function contextCounts(markdown: string): ContextCounts {
+  return {
+    services: tableRows(markdown, 'Services'),
+    hosts: tableRows(markdown, 'Hosts'),
+    routes: tableRows(markdown, 'Routes'),
+    ports: tableRows(markdown, 'Ports'),
+    expiry: tableRows(markdown, 'Expiry')
+  };
 }
+
+function tableRows(markdown: string, heading: string): number {
+  const section = markdown.split(/^## /m).find((part) => part.startsWith(`${heading}\n`));
+  if (!section) return 0;
+  const rows = section.split('\n').filter((line) => line.trim().startsWith('|'));
+  return Math.max(0, rows.length - 2);
+}
+
+function truncation(value: string | null): Record<string, number> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, number] => typeof entry[1] === 'number'));
+  } catch {
+    return {};
+  }
+}
+
+async function digest(body: ArrayBuffer): Promise<string> {
+  const value = await crypto.subtle.digest('SHA-256', body);
+  return [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+function groupHex(value: string): string {
+  return value.match(/.{1,4}/g)?.join(' ') ?? value;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kilobytes = bytes / 1024;
+  return `${Number.isInteger(kilobytes) ? kilobytes : kilobytes.toFixed(1)} KB`;
+}
+
+export const contextLimit = formatBytes(CONTEXT_LIMIT_BYTES);

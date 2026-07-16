@@ -15,33 +15,31 @@ export function buildSearchGroups(inventory: Inventory, rawQuery: string): Searc
   const query = rawQuery.trim().toLowerCase();
   if (!query) return [];
 
-  const services = inventory.services.flatMap<SearchResult>((service) => {
+  const classifiedServices = inventory.services.map((service) => {
     const name = service.name.toLowerCase();
     const stack = service.stack.toLowerCase();
-    if (!name.includes(query) && stack !== query) return [];
-    const nameMatch = name === query || (name.startsWith(`${query}-`) && !name.endsWith('-db'));
-    return [{
+    return {
+      service,
+      matches: name.includes(query) || stack === query,
+      direct: name === query || (name.startsWith(`${query}-`) && !name.endsWith('-db'))
+    };
+  });
+  const matchingServices = classifiedServices.filter(({ matches }) => matches);
+  const matchingServiceNames = new Set(matchingServices.map(({ service }) => service.name));
+  const directServiceNames = new Set(classifiedServices.filter(({ service, direct }) => direct && matchingServiceNames.has(service.name)).map(({ service }) => service.name));
+  const matchingServiceCountsByHost = new Map<string, number>();
+  for (const { service } of matchingServices) {
+    matchingServiceCountsByHost.set(service.host, (matchingServiceCountsByHost.get(service.host) ?? 0) + 1);
+  }
+  const services = matchingServices.map<SearchResult>(({ service, direct }) => {
+    return {
       group: 'Services',
       title: service.name,
       meta: `SRV-${String(service.id).padStart(3, '0')} · ${service.stack} · ${service.host}`,
-      reason: nameMatch ? `Name starts with ‘${query}’` : `Stack equals ‘${query}’`,
+      reason: direct ? `Name starts with ‘${query}’` : `Stack equals ‘${query}’`,
       state: service.state
-    }];
+    };
   });
-
-  const matchingServiceNames = new Set(
-    inventory.services
-      .filter((service) => service.name.toLowerCase().includes(query) || service.stack.toLowerCase() === query)
-      .map((service) => service.name)
-  );
-  const directServiceNames = new Set(
-    inventory.services
-      .filter((service) => {
-        const name = service.name.toLowerCase();
-        return name === query || (name.startsWith(`${query}-`) && !name.endsWith('-db'));
-      })
-      .map((service) => service.name)
-  );
 
   const routes = inventory.routes.flatMap<SearchResult>((route) => {
     const connected = [...directServiceNames].find((name) => route.service === name || route.upstream_host === name);
@@ -70,7 +68,7 @@ export function buildSearchGroups(inventory: Inventory, rawQuery: string): Searc
   });
 
   const hosts = inventory.hosts.flatMap<SearchResult>((host) => {
-    const count = inventory.services.filter((service) => service.host === host.name && matchingServiceNames.has(service.name)).length;
+    const count = matchingServiceCountsByHost.get(host.name) ?? 0;
     if (!host.name.toLowerCase().includes(query) && count === 0) return [];
     return [{
       group: 'Hosts',

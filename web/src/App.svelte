@@ -5,20 +5,10 @@
   import Setup from './lib/Setup.svelte';
   import Login from './lib/Login.svelte';
   import CommandPalette from './lib/CommandPalette.svelte';
-  import { getSetupStatus, loadInventory, type Inventory } from './lib/api';
-  import * as demo from './lib/demo';
+  import { createEmptyInventory, getSetupStatus, loadInventory, type Inventory } from './lib/api';
   import { navigate, route } from './lib/router';
 
-  let inventory = $state<Inventory>({
-    services: demo.services,
-    hosts: demo.hosts,
-    ports: demo.ports,
-    routes: demo.routes,
-    changes: demo.changes,
-    expiries: demo.expiries,
-    connectors: demo.connectors,
-    source: 'demo'
-  });
+  let inventory = $state<Inventory>(createEmptyInventory());
   let loading = $state(true);
   let paletteOpen = $state(false);
   let theme = $state<'dark' | 'light'>('dark');
@@ -29,7 +19,7 @@
   async function refresh() {
     loading = true;
     inventory = await loadInventory();
-    authRequired = inventory.error?.startsWith('Sign in') ?? false;
+    authRequired = inventory.issues.some((issue) => issue.kind === 'unauthorized');
     loading = false;
   }
 
@@ -48,6 +38,8 @@
       // provides the authoritative authentication state in that case.
     }
     await refresh();
+    const hasInventory = inventory.services.length + inventory.hosts.length + inventory.ports.length + inventory.routes.length > 0;
+    if (!authRequired && !inventory.readOnly && !hasInventory && !inventory.connectors.length && !inventory.issues.length && pathname !== '/setup') navigate('/setup');
   });
 
   $effect(() => {

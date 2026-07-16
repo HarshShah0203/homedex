@@ -1,11 +1,11 @@
 import { render, screen } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
 import CommandPalette from './CommandPalette.svelte';
-import * as demo from './demo';
+import { createDemoInventory } from './demo';
 
 describe('CommandPalette', () => {
   it('renders grouped cmd-K results with explicit match reasons', () => {
-    render(CommandPalette, { props: { open: true, inventory: { ...demo, source: 'demo' } } });
+    render(CommandPalette, { props: { open: true, inventory: createDemoInventory() } });
     expect(screen.getByRole('dialog', { name: 'Search every record' })).toBeInTheDocument();
     expect(screen.getByText(/Name starts with ‘immich’/)).toBeInTheDocument();
     expect(screen.getByText(/Stack equals ‘immich’/)).toBeInTheDocument();

@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import * as demo from './demo';
+import { createDemoInventory } from './demo';
 import { buildSearchGroups } from './search';
-
-const inventory = { ...demo, source: 'demo' as const };
 
 describe('buildSearchGroups', () => {
   it('groups connected inventory matches and explains why each record matched', () => {
+    const inventory = createDemoInventory();
     const groups = buildSearchGroups(inventory, 'immich');
     expect(groups.map((group) => group.label)).toEqual(['Services', 'Routes', 'Ports', 'Hosts']);
     expect(groups.flatMap((group) => group.results.map((result) => result.reason))).toEqual([
@@ -18,6 +17,7 @@ describe('buildSearchGroups', () => {
   });
 
   it('returns no groups for an empty query', () => {
+    const inventory = createDemoInventory();
     expect(buildSearchGroups(inventory, '   ')).toEqual([]);
   });
 });
