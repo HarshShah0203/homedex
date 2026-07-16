@@ -28,6 +28,7 @@ type Config struct {
 	Version          string
 	NoAuth           bool
 	SecureCookies    bool
+	TrustedProxies   TrustedProxySet
 	ConnectorConfigs *store.ConnectorConfigs
 	Registry         *connectors.Registry
 	Runner           *engine.Runner
@@ -51,7 +52,7 @@ type Server struct {
 func New(s *store.Store, b *Broker, cfg Config) http.Handler {
 	x := &Server{store: s, sessions: auth.NewSessionManager(s.DB(), 24*time.Hour), shares: auth.NewShareManager(s.DB()), entities: store.NewEntityManager(s), broker: b, cfg: cfg, limiter: newLoginLimiter(), configs: cfg.ConnectorConfigs, registry: cfg.Registry, runner: cfg.Runner, notify: cfg.Notifications}
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Timeout(75*time.Second))
+	r.Use(middleware.RequestID, middleware.Recoverer, middleware.Timeout(75*time.Second))
 	r.Get("/api/health", x.health)
 	r.Get("/api/version", x.version)
 	r.Get("/api/setup/status", x.setupStatus)
@@ -589,7 +590,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	s.issueSession(w, r)
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow(r.RemoteAddr, time.Now()) {
+	if !s.limiter.allow(s.cfg.TrustedProxies.clientIP(r), time.Now()) {
 		http.Error(w, "too many login attempts", http.StatusTooManyRequests)
 		return
 	}
@@ -768,29 +769,70 @@ func queryInt(r *http.Request, key string, def, min, max int) int {
 }
 
 type loginLimiter struct {
-	mu       sync.Mutex
-	attempts map[string][]time.Time
+	mu              sync.Mutex
+	buckets         map[string]loginBucket
+	lastCleanup     time.Time
+	window          time.Duration
+	cleanupInterval time.Duration
+	maxAttempts     int
+	maxBuckets      int
 }
 
-func newLoginLimiter() *loginLimiter { return &loginLimiter{attempts: map[string][]time.Time{}} }
-func (l *loginLimiter) allow(remote string, now time.Time) bool {
-	host := remote
-	if i := strings.LastIndex(host, ":"); i > 0 {
-		host = host[:i]
+type loginBucket struct {
+	attempts []time.Time
+}
+
+const overflowLoginBucket = "__overflow__"
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{
+		buckets:         map[string]loginBucket{},
+		window:          time.Minute,
+		cleanupInterval: time.Minute,
+		maxAttempts:     5,
+		maxBuckets:      10_000,
 	}
+}
+
+func (l *loginLimiter) allow(client string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	cut := now.Add(-time.Minute)
-	kept := l.attempts[host][:0]
-	for _, t := range l.attempts[host] {
-		if t.After(cut) {
-			kept = append(kept, t)
-		}
+	if l.lastCleanup.IsZero() || now.Before(l.lastCleanup) || now.Sub(l.lastCleanup) >= l.cleanupInterval {
+		l.cleanup(now)
 	}
-	if len(kept) >= 5 {
-		l.attempts[host] = kept
+	if _, exists := l.buckets[client]; !exists && len(l.buckets) >= l.maxBuckets-1 {
+		client = overflowLoginBucket
+	}
+	bucket := l.buckets[client]
+	bucket.attempts = activeAttempts(bucket.attempts, now.Add(-l.window))
+	if len(bucket.attempts) >= l.maxAttempts {
+		l.buckets[client] = bucket
 		return false
 	}
-	l.attempts[host] = append(kept, now)
+	bucket.attempts = append(bucket.attempts, now)
+	l.buckets[client] = bucket
 	return true
+}
+
+func (l *loginLimiter) cleanup(now time.Time) {
+	cutoff := now.Add(-l.window)
+	for client, bucket := range l.buckets {
+		bucket.attempts = activeAttempts(bucket.attempts, cutoff)
+		if len(bucket.attempts) == 0 {
+			delete(l.buckets, client)
+			continue
+		}
+		l.buckets[client] = bucket
+	}
+	l.lastCleanup = now
+}
+
+func activeAttempts(attempts []time.Time, cutoff time.Time) []time.Time {
+	kept := attempts[:0]
+	for _, attempt := range attempts {
+		if attempt.After(cutoff) {
+			kept = append(kept, attempt)
+		}
+	}
+	return kept
 }

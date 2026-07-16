@@ -51,7 +51,20 @@ func (s *Store) DB() *sql.DB  { return s.db }
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("disable foreign keys for migrations: %w", err)
+	}
+	defer func() {
+		restoreCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(restoreCtx, `PRAGMA foreign_keys=ON`)
+	}()
+	if _, err = conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return err
 	}
 	entries, err := fs.ReadDir(migrations, "migrations")
@@ -69,7 +82,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("invalid migration %q", entry.Name())
 		}
 		var exists int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version=?`, version).Scan(&exists); err != nil {
+		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version=?`, version).Scan(&exists); err != nil {
 			return err
 		}
 		if exists != 0 {
@@ -79,12 +92,15 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		tx, err := s.db.BeginTx(ctx, nil)
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, string(body)); err == nil {
 			_, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)`, version, time.Now().UTC().Format(time.RFC3339Nano))
+		}
+		if err == nil {
+			err = checkForeignKeys(ctx, tx)
 		}
 		if err != nil {
 			tx.Rollback()
@@ -94,7 +110,35 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if _, err = conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`); err != nil {
+		return fmt.Errorf("restore foreign keys after migrations: %w", err)
+	}
+	var enabled int
+	if err = conn.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&enabled); err != nil {
+		return err
+	}
+	if enabled != 1 {
+		return errors.New("foreign keys remained disabled after migrations")
+	}
 	return nil
+}
+
+func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	if rows.Next() {
+		var table, parent string
+		var rowID any
+		var foreignKey int
+		if err = rows.Scan(&table, &rowID, &parent, &foreignKey); err != nil {
+			return err
+		}
+		return fmt.Errorf("foreign key check failed for %s row %v referencing %s", table, rowID, parent)
+	}
+	return rows.Err()
 }
 
 func (s *Store) CreateConnector(ctx context.Context, kind, name string, encrypted []byte) (int64, error) {

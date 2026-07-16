@@ -241,13 +241,26 @@ func (r *Runner) timeout() time.Duration {
 }
 
 type Scheduler struct {
-	runner   *Runner
-	interval time.Duration
-	now      func() time.Time
+	runner              *Runner
+	interval            time.Duration
+	now                 func() time.Time
+	goneRetention       time.Duration
+	maintenanceInterval time.Duration
+	lastMaintenance     time.Time
 }
 
+const DefaultGoneRetention = 30 * 24 * time.Hour
+
 func NewScheduler(r *Runner) *Scheduler {
-	return &Scheduler{runner: r, interval: 30 * time.Second, now: time.Now}
+	return &Scheduler{runner: r, interval: 30 * time.Second, now: time.Now, goneRetention: DefaultGoneRetention, maintenanceInterval: 24 * time.Hour}
+}
+
+func (s *Scheduler) SetGoneRetention(retention time.Duration) error {
+	if retention <= 0 {
+		return fmt.Errorf("gone retention must be positive")
+	}
+	s.goneRetention = retention
+	return nil
 }
 func (s *Scheduler) Run(ctx context.Context) {
 	s.tick(ctx)
@@ -263,6 +276,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 }
 func (s *Scheduler) tick(ctx context.Context) {
+	s.maintain(ctx)
+	if s.runner == nil || s.runner.Configs == nil {
+		return
+	}
 	records, e := s.runner.Configs.List(ctx)
 	if e != nil {
 		return
@@ -272,6 +289,19 @@ func (s *Scheduler) tick(ctx context.Context) {
 			continue
 		}
 		go func(id int64) { _, _, _ = s.runner.Scan(ctx, id) }(r.ID)
+	}
+}
+
+func (s *Scheduler) maintain(ctx context.Context) {
+	if s.runner == nil || s.runner.Applier == nil {
+		return
+	}
+	now := s.now()
+	if !s.lastMaintenance.IsZero() && now.Before(s.lastMaintenance.Add(s.maintenanceInterval)) {
+		return
+	}
+	if err := s.runner.Applier.PurgeGone(ctx, s.goneRetention); err == nil {
+		s.lastMaintenance = now
 	}
 }
 func (s *Scheduler) due(ctx context.Context, r store.ConnectorRecord) bool {

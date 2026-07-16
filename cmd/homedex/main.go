@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -42,6 +43,14 @@ func run() error {
 	dataDir := flag.String("data-dir", dataDefault, "directory for the SQLite database and instance key")
 	listen := flag.String("listen", listenDefault, "HTTP listen address")
 	flag.Parse()
+	trustedProxies, err := server.ParseTrustedProxies(os.Getenv("HOMEDEX_TRUSTED_PROXIES"))
+	if err != nil {
+		return fmt.Errorf("parse HOMEDEX_TRUSTED_PROXIES: %w", err)
+	}
+	goneRetention, err := envDays("HOMEDEX_GONE_RETENTION_DAYS", 30)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(*dataDir, 0700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
@@ -72,8 +81,12 @@ func run() error {
 	runner := engine.NewRunner(st, configs, registry, applier)
 	appCtx, cancelApp := context.WithCancel(context.Background())
 	defer cancelApp()
-	go engine.NewScheduler(runner).Run(appCtx)
-	handler := server.New(st, broker, server.Config{Version: version, NoAuth: envBool("HOMEDEX_NO_AUTH", false), SecureCookies: envBool("HOMEDEX_SECURE_COOKIES", false), ConnectorConfigs: configs, Registry: registry, Runner: runner, Notifications: notifications})
+	scheduler := engine.NewScheduler(runner)
+	if err = scheduler.SetGoneRetention(goneRetention); err != nil {
+		return err
+	}
+	go scheduler.Run(appCtx)
+	handler := server.New(st, broker, server.Config{Version: version, NoAuth: envBool("HOMEDEX_NO_AUTH", false), SecureCookies: envBool("HOMEDEX_SECURE_COOKIES", false), TrustedProxies: trustedProxies, ConnectorConfigs: configs, Registry: registry, Runner: runner, Notifications: notifications})
 	httpServer := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 60 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
@@ -113,4 +126,16 @@ func envBool(key string, def bool) bool {
 		return def
 	}
 	return parsed
+}
+
+func envDays(key string, defaultDays int64) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		value = strconv.FormatInt(defaultDays, 10)
+	}
+	days, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || days <= 0 || days > int64((1<<63-1)/(24*time.Hour)) {
+		return 0, fmt.Errorf("%s must be a positive whole number of days", key)
+	}
+	return time.Duration(days) * 24 * time.Hour, nil
 }
