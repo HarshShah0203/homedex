@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build -trimpath -o homedex ./cmd/homedex
+      - name: Enforce binary size budget
+        run: test "$(stat -c%s homedex)" -lt 41943040

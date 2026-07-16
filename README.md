@@ -50,7 +50,14 @@ Docker (local socket, remote hosts, [socket-proxy](https://github.com/Tecnativa/
 
 ## Quickstart
 
-> Coming with `v0.1.0` — a single `docker run` / compose block. Watch the repo for the release.
+The v0.1 foundation runs as a single process with no external services:
+
+```sh
+go run ./cmd/homedex
+# open http://localhost:7377
+```
+
+State and the mode-0600 instance encryption key are written under `./data` by default. Set `HOMEDEX_DATA_DIR`, `HOMEDEX_LISTEN`, or use `--data-dir` / `--listen` to override them. `HOMEDEX_NO_AUTH=true` is available only for trusted-proxy deployments.
 
 ## Architecture
 
