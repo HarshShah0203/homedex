@@ -640,8 +640,8 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			}
 		}
 		token := shareTokenFromRequest(r)
-		if item, err := s.shares.Validate(r.Context(), token); err == nil {
-			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal{kind: "share", shareID: item.ID})))
+		if _, err := s.shares.Validate(r.Context(), token); err == nil {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal{kind: "share"})))
 			return
 		}
 		http.Error(w, "authentication required", http.StatusUnauthorized)

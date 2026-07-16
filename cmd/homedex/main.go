@@ -45,8 +45,6 @@ func run() error {
 	if err := os.MkdirAll(*dataDir, 0700); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
-	// Initialize the encryption key at startup even before connector CRUD lands,
-	// so every installation has secure-at-rest primitives from its first boot.
 	box, err := auth.LoadOrCreateSecretBox(*dataDir)
 	if err != nil {
 		return fmt.Errorf("initialize instance key: %w", err)

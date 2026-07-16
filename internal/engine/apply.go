@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -322,7 +323,7 @@ func applyPorts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 		newKeys = append(newKeys, p.NaturalKey())
 	}
 	sort.Strings(newKeys)
-	if stringSliceEqual(old, newKeys) {
+	if slices.Equal(old, newKeys) {
 		return 0, nil
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM ports WHERE connector_id=?`, connectorID); err != nil {
@@ -560,15 +561,4 @@ func nullableString(v string) any {
 		return nil
 	}
 	return v
-}
-func stringSliceEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

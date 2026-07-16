@@ -10,8 +10,7 @@ import (
 type principalContextKey struct{}
 
 type principal struct {
-	kind    string
-	shareID int64
+	kind string
 }
 
 func isShareRequest(r *http.Request) bool {
