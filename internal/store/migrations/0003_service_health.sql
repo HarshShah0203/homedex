@@ -1,0 +1,1 @@
+ALTER TABLE services ADD COLUMN health TEXT NOT NULL DEFAULT '';

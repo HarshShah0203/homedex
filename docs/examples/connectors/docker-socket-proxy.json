@@ -1,0 +1,5 @@
+{
+  "endpoint": "tcp://docker-socket-proxy:2375",
+  "host_name": "docker-local",
+  "host_address": "127.0.0.1"
+}

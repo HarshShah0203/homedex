@@ -1,0 +1,26 @@
+# Homedex inventory
+
+Schema: `homedex.inventory.v1`
+
+## Host: nas
+
+- Kind: docker
+- Address: 10.0.0.2
+- State: active
+- Notes: main rack
+
+| Service | Stack | Image | State |
+|---|---|---|---|
+| photos | media | ghcr.io/example/photos:v1 | running |
+
+## Routes
+
+| Domain | Path | Proxy | Upstream | Service | TLS | Status |
+|---|---|---|---|---|---|---|
+| photos.example.com | / | caddy | 10.0.0.2:2283 | photos | true | ok |
+
+## Expiry
+
+| Name | Type | Authority | Expires | State |
+|---|---|---|---|---|
+| photos.example.com | domain | Example Registrar | 2027-01-01T00:00:00Z | active |

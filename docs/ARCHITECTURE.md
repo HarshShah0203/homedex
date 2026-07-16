@@ -1,106 +1,91 @@
 # Homedex Architecture
 
-Single process, one port (default **7377**), one SQLite file. No external services. Works air-gapped.
+Homedex v0.1 is one Go process, one HTTP port (default `7377`), and one SQLite database. The Svelte SPA is compiled into `internal/server/static` and embedded in the binary.
 
-```
-                        ┌────────────────────────────────────────────┐
-                        │              homedex (1 binary)            │
-                        │                                            │
-  Docker hosts ────────▶│  Connectors ──▶ Snapshot ──▶ Diff Engine   │
-  (socket/proxy/TCP)    │  (goroutines)      │            │          │
-  Traefik API ─────────▶│                    ▼            ▼          │
-  Caddy admin API ─────▶│                 SQLite (WAL, FTS5)         │
-  NPM API ─────────────▶│                    │                       │
-  TLS probes ──────────▶│                    ▼                       │
-  RDAP ────────────────▶│   REST API + SSE  ◀── embedded Svelte SPA  │
-                        │        │                                   │
-                        │        ▼                                   │
-                        │  shoutrrr notifications (ntfy/discord/…)   │
-                        └────────────────────────────────────────────┘
-```
-
-## Stack
-
-| Layer | Choice |
-|---|---|
-| Backend | Go 1.23+, `chi` router, single static binary |
-| DB | SQLite (`modernc.org/sqlite`, no CGO) + `sqlc` + FTS5 + embedded `golang-migrate` migrations; WAL mode, single writer goroutine |
-| Docker | official `docker/docker/client` (unix socket, `tcp://` +TLS, `ssh://`, socket-proxy) |
-| Domain expiry | RDAP (IANA bootstrap, key-free) + `x/net/publicsuffix` |
-| Notifications | `containrrr/shoutrrr` (ntfy/Discord/Slack/webhook/SMTP) |
-| Crypto | argon2id (admin password), NaCl secretbox (connector secrets at rest) |
-| Frontend | Svelte 5 + Vite + Tailwind SPA, embedded via `embed.FS`; custom virtualized table component |
-| Release | GoReleaser + GitHub Actions; multi-arch images (amd64/arm64/armv7) targeting <30MB |
-
-**Budgets (CI-enforced):** cold start <2s · 100-container scan <10s · search <50ms · idle RSS <60MB · image <30MB.
-
-## Repository layout
-
-```
-cmd/homedex/            # bootstrap: flags/env, embed web, start server + engine
-internal/
-  server/               # chi routes, sessions, SSE
-  store/                # sqlc queries, migrations, FTS sync
-  engine/               # scheduler, snapshot diff, change computation
-  connectors/           # docker/ traefik/ caddy/ npm/ tlsprobe/ rdap/
-  resolve/              # route → container resolution
-  export/               # markdown/csv/json/context-pack + redaction
-  notify/               # rules engine + shoutrrr
-  auth/                 # argon2id, sessions, share tokens
-web/                    # Svelte app → dist embedded
-demo/                   # fake-lab compose + seeder (fixtures, e2e, public demo)
+```text
+Docker / proxy / TLS / RDAP sources
+                  |
+                  v
+       read-only connectors
+                  |
+                  v
+        typed full snapshots
+                  |
+                  v
+   reconcile + diff + route resolver
+                  |
+                  v
+       SQLite (WAL + FTS5)
+                  |
+                  v
+      JSON API / SSE / embedded SPA
 ```
 
-## Data model (summary)
+## Runtime startup
 
-`hosts` · `services` (natural-keyed, `first_seen`/`last_seen`, soft `gone` state) · `ports` (published vs internal) · `proxies` · `routes` (domain, upstream, `resolved_service_id`, confidence, `ok|broken|unknown`) · `certs` (probed `not_after`, chain validity) · `domains` (RDAP expiry) · `custom_fields` · `tags` · `scan_runs` · `changes` (added/removed/modified + JSON diff) · `connectors` (encrypted config) · `notification_rules` · `share_tokens` · `sessions`. FTS5 virtual table over names/images/notes/domains/tags, trigger-synced.
+`cmd/homedex/main.go`:
 
-## Connector framework
+1. Resolves `HOMEDEX_DATA_DIR` (default `data`) and `HOMEDEX_LISTEN` (default `:7377`).
+2. Creates or loads the secretbox key.
+3. Opens SQLite and applies embedded, ordered SQL migrations.
+4. Registers Docker, Traefik, Caddy, NPM, TLS probe, and RDAP connectors.
+5. Starts the enabled-connector scheduler.
+6. Serves health/version, setup/auth, inventory, connector, scan, search, SSE, and SPA routes.
+
+The runtime has no required database server, queue, cache, cloud account, or telemetry service.
+
+## Persistence
+
+`modernc.org/sqlite` provides a pure-Go SQLite driver, so release builds use `CGO_ENABLED=0`. Startup applies SQL files from `internal/store/migrations` inside transactions. Connections use:
+
+- `journal_mode=WAL`
+- `busy_timeout=5000`
+- `foreign_keys=ON`
+
+The application serializes snapshot reconciliation with one process-local mutex while allowing concurrent readers. A scan run and its entity/port/change updates commit atomically.
+
+Main records include connectors, hosts, services, service network aliases, ports, routes, certificates, domains, scan runs, changes, sessions/shares, tags/custom fields, manual expiries, notification rules, and delivery deduplication. FTS5 indexes searchable host/service/route/tag text.
+
+## Connector boundary
 
 ```go
 type Connector interface {
     Kind() string
-    Validate(ctx context.Context, cfg Config) error
-    Scan(ctx context.Context, cfg Config) (Snapshot, error)
+    Validate(context.Context, Config) error
+    Scan(context.Context, Config) (domain.Snapshot, error)
 }
 ```
 
-Connectors return typed `Snapshot` sets with stable natural keys and **never touch the DB**. Per-connector ticker (default 15 min ± jitter), manual "Scan now", 60s timeout, errors surfaced verbatim in the UI. The diff engine upserts by natural key, marks absentees `gone` (hard-delete after N days), and emits `changes` rows for tracked fields only.
+Connectors decode encrypted configuration, retrieve source state, and return domain snapshots. They do not receive the database handle. The engine owns reconciliation and marks no-longer-observed entities as gone rather than immediately deleting them.
 
-### Docker
+Docker's snapshot model deliberately has no environment-variable field. It retains the network addresses and aliases needed for route resolution.
 
-`ContainerList(all)` + `ContainerInspect` (concurrency 8) + `Info`. Service name from `com.docker.compose.service` label, stack from `com.docker.compose.project`; ports from `NetworkSettings.Ports` + `HostConfig.PortBindings`; per-network IPs and aliases retained for route resolution. **`Config.Env` is never read.** Remote hosts via `tcp://`(+TLS), `ssh://`, or docker-socket-proxy (recommended, documented).
+## Route resolution
 
-### Traefik / Caddy / NPM
+For every active proxy route, resolution tries deterministic evidence in order:
 
-- **Traefik:** `/api/http/routers|services|entrypoints`; parse `Host()`/`PathPrefix()` from rules; follow service → `loadBalancer.servers[].url`.
-- **Caddy:** admin API `GET /config/`; recursive traversal of `apps.http.servers.*.routes[]` (incl. subroutes) collecting `match[].host[]` and `reverse_proxy` upstream `dial` targets.
-- **NPM:** JWT via `POST /api/tokens`; `GET /api/nginx/proxy-hosts` (domains, forward host/port, locations) + `/api/nginx/certificates` (expiry).
+1. Docker network IP plus matching internal port → `high` confidence.
+2. Container name or network alias plus matching internal port → `high` confidence.
+3. Docker host address plus a unique published port → `medium` confidence.
+4. No unique match → `broken`, confidence `none`.
 
-### TLS prober & RDAP
+Resolution is rerun after snapshots are applied. The deterministic demo includes all three outcomes.
 
-Prober: `tls.Dial` (5s timeout, SNI, capture-even-if-invalid) → leaf expiry/issuer/SANs + separate chain verification; concurrency 10; daily + on-demand. RDAP: eTLD+1 via publicsuffix (skip `.local`/`.lan`/IPs), IANA bootstrap cached 7d, per-domain cache 24h, 1 req/s global, graceful degradation to "unknown".
+## Authentication and secrets
 
-## Route → container resolution
+First-run setup stores an Argon2id password hash. Successful setup/login creates an opaque session token and separate CSRF token; only hashes are persisted. Connector config is secretbox-encrypted with an instance key from `/data/instance.key` or `HOMEDEX_SECRET`.
 
-For each route upstream `(host, port)`:
+`HOMEDEX_NO_AUTH=true` bypasses both session and CSRF checks. It is a deployment escape hatch for a trusted authenticating reverse proxy, not a safe public mode.
 
-1. **Container-network IP match** → confidence **high**
-2. **Name match** (container name / compose service / network alias) → **high**
-3. **Host-published port match** (upstream targets a Docker host address) → **medium**; if no container publishes it, link the host itself
-4. **No match** → `status=broken` (surfaced red in the Routes view)
+## Build and release
 
-Re-resolved after every docker/proxy scan. Unit-tested against the fixture lab (IP match, alias match, published-port match, recreated container, dead route).
+The Dockerfile has separate Node, minimal OpenSSH-closure, Go dependency, application build, seed build, and distroless runtime stages. BuildKit cache mounts keep npm, module, and Go build caches out of final layers. The final image contains the application binary, distroless CA certificates, `ssh`/`ssh-keyscan` plus only their runtime libraries/configuration, an empty non-root SSH directory, and an empty `/data` directory.
 
-## Security model
+GoReleaser cross-compiles CGO-free archives. GitHub Actions separately uses Buildx/QEMU for multi-architecture OCI images. CI targets an uncompressed image size below 30 MiB and fails at 40 MiB.
 
-- Read-only credentials everywhere; no write code paths toward connected systems
-- Env vars never ingested; mount source paths only
-- Connector secrets secretbox-encrypted; key = 0600 file in data dir or `HOMEDEX_SECRET`
-- Sessions: HttpOnly SameSite=Lax cookie, CSRF header check on mutations, login rate-limited; `HOMEDEX_NO_AUTH` for trusted-proxy setups
-- Share links: 128-bit tokens, hashed at rest, revocable, read-only scope
-- Outbound network: only RDAP (opt-in) and user-configured notification targets; no telemetry, ever
+## Operational boundaries
 
-## Testing
-
-Connector unit tests against recorded API fixtures · resolution matrix tests · diff-engine idempotency (re-scan ⇒ zero changes) · Playwright e2e against the seeded fixture lab · CI-blocking redaction suite and golden-file exports · image/binary size and startup smoke gates.
+- Homedex writes its own SQLite state; “read-only” refers to connected infrastructure, not `/data`.
+- The process serves HTTP, not HTTPS.
+- TLS and RDAP scans are explicit connector configurations in v0.1; proxy routes do not automatically create those connector records.
+- The backend implements export, share, entity-enrichment, manual-entity, change-review, and notification APIs. The current web UI contains preview controls that are not all wired to those APIs. The README's implementation table is the user-facing contract.

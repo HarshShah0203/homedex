@@ -1,0 +1,2 @@
+id,host,name,kind,stack,image,tag,state,health,restart_policy,first_seen,last_seen,notes,tags,labels
+2,nas,photos,container,media,ghcr.io/example/photos,v1,running,,,2026-01-01T00:00:00Z,2026-01-02T00:00:00Z,See photos.example.com and 8.8.8.8,media,"{""com.example.api-token"":""[REDACTED]"",""purpose"":""[REDACTED]""}"

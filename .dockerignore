@@ -1,0 +1,17 @@
+.git
+.github
+.env
+.env.*
+data
+dist
+bin
+homedex
+*.db
+*.db-shm
+*.db-wal
+*.log
+web/node_modules
+web/dist
+web/.svelte-kit
+web/playwright-report
+web/test-results

@@ -7,6 +7,8 @@
 web/node_modules/
 web/dist/
 web/.svelte-kit/
+web/test-results/
+web/playwright-report/
 
 # data & local state
 /data/

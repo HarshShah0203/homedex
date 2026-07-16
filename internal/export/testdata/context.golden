@@ -1,0 +1,41 @@
+# Homedex lab context
+
+Schema: `homedex.inventory.v1`
+
+## Hosts
+
+| Name | Kind | Address | OS/arch | Notes |
+|---|---|---|---|---|
+| nas | docker | 10.0.0.2 | Linux amd64 | main rack |
+
+## Services
+
+| Host | Service | Stack | Image | State | Ports | Tags | Labels | Notes |
+|---|---|---|---|---|---|---|---|---|
+| nas | photos | media | ghcr.io/example/photos:v1 | running | 2283→2283/tcp | media | {"com.example.api-token":"[REDACTED]","purpose":"[REDACTED]"} | See photos.example.com and 8.8.8.8 |
+
+## Ports
+
+| Host | Service | Published | Container | Protocol | Scope |
+|---|---|---:|---:|---|---|
+| nas | photos | 2283 | 2283 | tcp | published |
+
+## Routes
+
+| Domain | Path | Proxy | Upstream | Service | TLS | Status |
+|---|---|---|---|---|---|---|
+| photos.example.com | / | caddy | 10.0.0.2:2283 | photos | true | ok |
+
+## Expiry
+
+| Name | Type | Authority | Expires | State |
+|---|---|---|---|---|
+| photos.example.com | domain | Example Registrar | 2027-01-01T00:00:00Z | active |
+
+## Truncation report
+
+- hosts: 0 omitted
+- services: 0 omitted
+- ports: 0 omitted
+- routes: 0 omitted
+- expiry: 0 omitted

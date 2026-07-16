@@ -1,0 +1,1 @@
+{"apps":{"http":{"servers":{"srv0":{"routes":[{"match":[{"host":["media.example.com"]}],"handle":[{"handler":"subroute","routes":[{"match":[{"path":["/jellyfin/*"]}],"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"jellyfin:8096"}]}]}]}]}]}}}}}
