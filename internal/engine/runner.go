@@ -69,8 +69,16 @@ func (r *Runner) Scan(ctx context.Context, id int64) (int64, int, error) {
 	r.publish(Event{Type: "scan.progress", ConnectorID: id, Phase: "discover", Message: "Discovery complete", Progress: 60, Stats: stats})
 	if rec.Kind == "traefik" || rec.Kind == "caddy" || rec.Kind == "npm" {
 		if proxyID, pe := r.ensureProxy(ctx, id, rec.Kind, cfg); pe == nil {
+			proxyHost, proxyNetworks, scopeErr := resolve.LoadProxyScope(ctx, r.Store.DB(), proxyID)
+			if scopeErr != nil {
+				r.failed(ctx, id, started, scopeErr)
+				return 0, 0, scopeErr
+			}
 			for i := range snap.Routes {
 				snap.Routes[i].ProxyID = &proxyID
+				snap.Routes[i].ProxyHostConnectorID = proxyHost.ConnectorID
+				snap.Routes[i].ProxyHostKey = proxyHost.Key
+				snap.Routes[i].ProxyNetworks = proxyNetworks
 			}
 		} else {
 			r.failed(ctx, id, started, pe)
@@ -147,9 +155,24 @@ func (r *Runner) ensureProxy(ctx context.Context, connectorID int64, kind string
 	var hostID any
 	if u, e := url.Parse(endpoint); e == nil && u.Hostname() != "" {
 		name := strings.ToLower(u.Hostname())
-		var id int64
-		if r.Store.DB().QueryRowContext(ctx, `SELECT id FROM hosts WHERE state='active' AND (LOWER(address)=? OR LOWER(name)=?) LIMIT 1`, name, name).Scan(&id) == nil {
-			hostID = id
+		rows, queryErr := r.Store.DB().QueryContext(ctx, `SELECT id FROM hosts WHERE state='active' AND (LOWER(address)=? OR LOWER(name)=?) ORDER BY id`, name, name)
+		if queryErr != nil {
+			return 0, queryErr
+		}
+		var ids []int64
+		for rows.Next() {
+			var candidate int64
+			if scanErr := rows.Scan(&candidate); scanErr != nil {
+				rows.Close()
+				return 0, scanErr
+			}
+			ids = append(ids, candidate)
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			return 0, closeErr
+		}
+		if len(ids) == 1 {
+			hostID = ids[0]
 		}
 	}
 	var id int64

@@ -89,6 +89,48 @@ func TestScanMapsRecordedInspectWithoutEnvironment(t *testing.T) {
 		t.Fatal("Config.Env leaked into snapshot")
 	}
 }
+
+func TestIndependentSourcesKeepStableSourceLocalKeys(t *testing.T) {
+	list := fixture[[]types.Container](t, "containers.json")
+	inspect := fixture[types.ContainerJSON](t, "inspect.json")
+	scan := func() domain.Snapshot {
+		t.Helper()
+		api := &fakeAPI{list: list, inspect: inspect}
+		connector := New()
+		connector.newClient = func(Config) (API, error) { return api, nil }
+		snapshot, err := connector.Scan(context.Background(), connectors.Config{"endpoint": raw(`"unix:///var/run/docker.sock"`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+
+	first, second := scan(), scan()
+	if len(first.Hosts) != 1 || len(first.Services) != 1 || len(first.Ports) == 0 {
+		t.Fatalf("incomplete first source snapshot: %#v", first)
+	}
+	if len(second.Hosts) != 1 || len(second.Services) != 1 || len(second.Ports) == 0 {
+		t.Fatalf("incomplete second source snapshot: %#v", second)
+	}
+	if first.Hosts[0].NaturalKey() != "docker:nas" || second.Hosts[0].NaturalKey() != first.Hosts[0].NaturalKey() {
+		t.Fatalf("host keys first/second=%q/%q", first.Hosts[0].NaturalKey(), second.Hosts[0].NaturalKey())
+	}
+	wantServiceKey := "container:" + list[0].ID
+	if first.Services[0].NaturalKey() != wantServiceKey || second.Services[0].NaturalKey() != wantServiceKey {
+		t.Fatalf("service keys first/second=%q/%q, want %q", first.Services[0].NaturalKey(), second.Services[0].NaturalKey(), wantServiceKey)
+	}
+	for source, snapshot := range map[string]domain.Snapshot{"first": first, "second": second} {
+		if snapshot.Services[0].HostKey != snapshot.Hosts[0].NaturalKey() {
+			t.Fatalf("%s source service host key=%q, want %q", source, snapshot.Services[0].HostKey, snapshot.Hosts[0].NaturalKey())
+		}
+		for _, p := range snapshot.Ports {
+			if p.HostKey != snapshot.Hosts[0].NaturalKey() || p.ServiceKey != snapshot.Services[0].NaturalKey() {
+				t.Fatalf("%s source port references host/service=%q/%q, want %q/%q", source, p.HostKey, p.ServiceKey, snapshot.Hosts[0].NaturalKey(), snapshot.Services[0].NaturalKey())
+			}
+		}
+	}
+}
+
 func TestInspectConcurrencyIsCappedAtEight(t *testing.T) {
 	inspect := fixture[types.ContainerJSON](t, "inspect.json")
 	api := &fakeAPI{inspect: inspect}

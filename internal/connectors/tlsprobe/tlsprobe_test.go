@@ -46,7 +46,7 @@ func TestProbeCapturesInvalidSelfSignedCertificate(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(snap.Certs) != 1 || snap.Certs[0].Subject != "homedex.test" || snap.Certs[0].ChainValid || !snap.Certs[0].NotAfter.Equal(until) {
+	if len(snap.Certs) != 1 || snap.Certs[0].Subject != "homedex.test" || snap.Certs[0].ChainValid || !snap.Certs[0].NotAfter.Equal(until) || snap.Certs[0].NaturalKey() != "tls:"+ln.Addr().String() {
 		t.Fatalf("cert=%#v", snap.Certs)
 	}
 }

@@ -190,6 +190,201 @@ func TestApplyDoesNotCollapseComposeReplicas(t *testing.T) {
 	}
 }
 
+func TestApplyKeepsDuplicateDockerNaturalKeysScopedByConnector(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	firstConnector, err := st.CreateConnector(ctx, "docker", "Docker one", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondConnector, err := st.CreateConnector(ctx, "docker", "Docker two", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := func(network string) domain.Snapshot {
+		return domain.Snapshot{
+			Hosts: []domain.Host{{Key: "docker:nas", Name: "nas", Kind: "docker", Address: "10.0.0.2"}},
+			Services: []domain.Service{{
+				Key:     "container:abc123",
+				HostKey: "docker:nas",
+				Name:    "immich",
+				Stack:   "photos",
+				State:   "running",
+				Networks: []domain.ServiceNetwork{{
+					Name: network,
+					IP:   "172.20.0.8",
+				}},
+			}},
+			Ports: []domain.Port{{
+				ServiceKey:    "container:abc123",
+				HostKey:       "docker:nas",
+				Number:        2283,
+				ContainerPort: 2283,
+				Protocol:      "tcp",
+				Published:     true,
+				HostIP:        "0.0.0.0",
+				Source:        "docker",
+			}},
+		}
+	}
+
+	applier := New(st, nil)
+	if _, _, err = applier.Apply(ctx, firstConnector, snapshot("source-one")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = applier.Apply(ctx, secondConnector, snapshot("source-two")); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM hosts WHERE natural_key='docker:nas' AND state='active'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("active duplicate-key hosts=%d, want 2", count)
+	}
+	if err = st.DB().QueryRow(`
+		SELECT COUNT(*)
+		FROM services s
+		JOIN hosts h ON h.id=s.host_id
+		WHERE s.natural_key='container:abc123'
+		  AND s.connector_id=h.connector_id
+		  AND s.state='running'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("source-owned duplicate-key services=%d, want 2", count)
+	}
+	if err = st.DB().QueryRow(`
+		SELECT COUNT(*)
+		FROM ports p
+		JOIN services s ON s.id=p.service_id
+		JOIN hosts h ON h.id=p.host_id
+		WHERE p.connector_id=s.connector_id
+		  AND p.connector_id=h.connector_id
+		  AND s.natural_key='container:abc123'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("source-owned duplicate-key ports=%d, want 2", count)
+	}
+	if err = st.DB().QueryRow(`
+		SELECT COUNT(*)
+		FROM service_networks n
+		JOIN services s ON s.id=n.service_id
+		WHERE (s.connector_id=? AND n.network_name='source-one')
+		   OR (s.connector_id=? AND n.network_name='source-two')`, firstConnector, secondConnector).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("source-owned service networks=%d, want 2", count)
+	}
+
+	if _, _, err = applier.Apply(ctx, firstConnector, domain.Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	var firstHostState, firstServiceState, secondHostState, secondServiceState string
+	if err = st.DB().QueryRow(`SELECT state FROM hosts WHERE connector_id=? AND natural_key='docker:nas'`, firstConnector).Scan(&firstHostState); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT state FROM services WHERE connector_id=? AND natural_key='container:abc123'`, firstConnector).Scan(&firstServiceState); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT state FROM hosts WHERE connector_id=? AND natural_key='docker:nas'`, secondConnector).Scan(&secondHostState); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT state FROM services WHERE connector_id=? AND natural_key='container:abc123'`, secondConnector).Scan(&secondServiceState); err != nil {
+		t.Fatal(err)
+	}
+	if firstHostState != "gone" || firstServiceState != "gone" || secondHostState != "active" || secondServiceState != "running" {
+		t.Fatalf("states after source-one empty scan: first host/service=%q/%q second=%q/%q", firstHostState, firstServiceState, secondHostState, secondServiceState)
+	}
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM ports WHERE connector_id=?`, secondConnector).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("source-two ports after source-one empty scan=%d, want 1", count)
+	}
+}
+
+func TestApplyKeepsNPMAndTLSProbeCertificatesSeparate(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	npmConnector, err := st.CreateConnector(ctx, "npm", "NPM", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsConnector, err := st.CreateConnector(ctx, "tlsprobe", "TLS probe", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const endpoint = "photos.example:443"
+	expires := time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)
+	certificate := func(source string) domain.Snapshot {
+		return domain.Snapshot{Certs: []domain.Cert{{
+			Key:      "tls:" + endpoint,
+			Subject:  "photos.example",
+			SANs:     []string{"photos.example"},
+			NotAfter: expires,
+			Source:   source,
+			Endpoint: endpoint,
+		}}}
+	}
+
+	applier := New(st, nil)
+	if _, _, err = applier.Apply(ctx, npmConnector, certificate("proxy")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = applier.Apply(ctx, tlsConnector, certificate("probe")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = applier.Apply(ctx, npmConnector, certificate("proxy")); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM certs WHERE natural_key=? AND endpoint=? AND state='active'`, "tls:"+endpoint, endpoint).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("active shared-endpoint certificates=%d, want 2", count)
+	}
+	var npmSource, tlsSource string
+	if err = st.DB().QueryRow(`SELECT source FROM certs WHERE connector_id=? AND natural_key=?`, npmConnector, "tls:"+endpoint).Scan(&npmSource); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT source FROM certs WHERE connector_id=? AND natural_key=?`, tlsConnector, "tls:"+endpoint).Scan(&tlsSource); err != nil {
+		t.Fatal(err)
+	}
+	if npmSource != "proxy" || tlsSource != "probe" {
+		t.Fatalf("certificate sources npm/tls=%q/%q", npmSource, tlsSource)
+	}
+
+	if _, _, err = applier.Apply(ctx, npmConnector, domain.Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	var npmState, tlsState string
+	if err = st.DB().QueryRow(`SELECT state FROM certs WHERE connector_id=? AND natural_key=?`, npmConnector, "tls:"+endpoint).Scan(&npmState); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT state FROM certs WHERE connector_id=? AND natural_key=?`, tlsConnector, "tls:"+endpoint).Scan(&tlsState); err != nil {
+		t.Fatal(err)
+	}
+	if npmState != "gone" || tlsState != "active" {
+		t.Fatalf("certificate states after NPM empty scan=%q/%q", npmState, tlsState)
+	}
+}
+
 func TestApplyEvaluatesNotificationRulesAfterCommit(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))

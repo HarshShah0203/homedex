@@ -70,17 +70,20 @@ func (p Port) NaturalKey() string {
 }
 
 type Route struct {
-	Key                string
-	ProxyID            *int64
-	ProxyHostKey       string
-	Domain             string
-	PathPrefix         string
-	UpstreamHost       string
-	UpstreamPort       int
-	ResolvedServiceKey string
-	ResolveConfidence  string
-	TLS                bool
-	Status             string
+	Key                        string
+	ProxyID                    *int64
+	ProxyHostConnectorID       int64
+	ProxyHostKey               string
+	ProxyNetworks              []string
+	Domain                     string
+	PathPrefix                 string
+	UpstreamHost               string
+	UpstreamPort               int
+	ResolvedServiceKey         string
+	ResolvedServiceConnectorID int64
+	ResolveConfidence          string
+	TLS                        bool
+	Status                     string
 }
 
 func (r Route) NaturalKey() string { return r.Key }

@@ -62,6 +62,132 @@ func TestRunnerPersistsProxyIdentityOnRoutes(t *testing.T) {
 		t.Fatalf("proxy=%d host=%d kind=%q endpoint=%q", proxyID, hostID, kind, endpoint)
 	}
 }
+
+func TestRunnerScopesDuplicateNetworkIPRoutes(t *testing.T) {
+	tests := []struct {
+		name               string
+		endpoint           string
+		wantServiceSource  bool
+		wantConfidence     string
+		wantStatus         string
+		wantProxyHostMatch bool
+	}{
+		{
+			name:               "unique proxy source",
+			endpoint:           "http://10.0.0.3:2019",
+			wantServiceSource:  true,
+			wantConfidence:     "high",
+			wantStatus:         "ok",
+			wantProxyHostMatch: true,
+		},
+		{
+			name:           "ambiguous proxy source",
+			endpoint:       "http://nas:2019",
+			wantConfidence: "none",
+			wantStatus:     "broken",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+
+			firstDocker, err := st.CreateConnector(ctx, "docker", "Docker one", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondDocker, err := st.CreateConnector(ctx, "docker", "Docker two", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dockerSnapshot := func(address string) domain.Snapshot {
+				return domain.Snapshot{
+					Hosts: []domain.Host{{Key: "docker:nas", Name: "nas", Kind: "docker", Address: address}},
+					Services: []domain.Service{{
+						Key:     "container:abc123",
+						HostKey: "docker:nas",
+						Name:    "immich",
+						State:   "running",
+						Networks: []domain.ServiceNetwork{{
+							Name: "apps",
+							IP:   "172.20.0.8",
+						}},
+					}},
+					Ports: []domain.Port{{
+						ServiceKey:    "container:abc123",
+						HostKey:       "docker:nas",
+						Number:        2283,
+						ContainerPort: 2283,
+						Protocol:      "tcp",
+					}},
+				}
+			}
+			applier := New(st, nil)
+			if _, _, err = applier.Apply(ctx, firstDocker, dockerSnapshot("10.0.0.2")); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = applier.Apply(ctx, secondDocker, dockerSnapshot("10.0.0.3")); err != nil {
+				t.Fatal(err)
+			}
+
+			box, err := auth.NewSecretBox(bytes.Repeat([]byte{9}, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			configs := store.NewConnectorConfigs(st, box)
+			caddyID, err := configs.Create(ctx, "caddy", "Caddy", map[string]string{"url": tt.endpoint})
+			if err != nil {
+				t.Fatal(err)
+			}
+			connector := &runnerConnector{kind: "caddy", snapshot: domain.Snapshot{Routes: []domain.Route{{
+				Key:          "route:photos.example:/",
+				Domain:       "photos.example",
+				PathPrefix:   "/",
+				UpstreamHost: "172.20.0.8",
+				UpstreamPort: 2283,
+			}}}}
+			registry := connectors.NewRegistry()
+			if err = registry.Register(connector); err != nil {
+				t.Fatal(err)
+			}
+			runner := NewRunner(st, configs, registry, applier)
+			if _, _, err = runner.Scan(ctx, caddyID); err != nil {
+				t.Fatal(err)
+			}
+
+			var resolvedServiceID, resolvedConnectorID, proxyHostID int64
+			var confidence, status string
+			if err = st.DB().QueryRow(`
+				SELECT COALESCE(r.resolved_service_id,0),COALESCE(s.connector_id,0),
+				       r.resolve_confidence,r.status,COALESCE(p.host_id,0)
+				FROM routes r
+				JOIN proxies p ON p.id=r.proxy_id
+				LEFT JOIN services s ON s.id=r.resolved_service_id
+				WHERE r.connector_id=? AND r.natural_key='route:photos.example:/'`, caddyID).
+				Scan(&resolvedServiceID, &resolvedConnectorID, &confidence, &status, &proxyHostID); err != nil {
+				t.Fatal(err)
+			}
+			if confidence != tt.wantConfidence || status != tt.wantStatus {
+				t.Fatalf("route confidence/status=%q/%q, want %q/%q", confidence, status, tt.wantConfidence, tt.wantStatus)
+			}
+			if tt.wantServiceSource {
+				if resolvedServiceID == 0 || resolvedConnectorID != secondDocker {
+					t.Fatalf("resolved service id/source=%d/%d, want source %d", resolvedServiceID, resolvedConnectorID, secondDocker)
+				}
+			} else if resolvedServiceID != 0 || resolvedConnectorID != 0 {
+				t.Fatalf("ambiguous route persisted service id/source=%d/%d", resolvedServiceID, resolvedConnectorID)
+			}
+			if tt.wantProxyHostMatch != (proxyHostID != 0) {
+				t.Fatalf("proxy host id=%d, want matched=%t", proxyHostID, tt.wantProxyHostMatch)
+			}
+		})
+	}
+}
+
 func TestRunnerRecordsFailureAndRetainsPreviousData(t *testing.T) {
 	ctx := context.Background()
 	st, e := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))

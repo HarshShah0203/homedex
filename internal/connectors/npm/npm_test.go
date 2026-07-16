@@ -43,7 +43,7 @@ func TestScanRefreshesJWTAndParsesLocationsAndCertificates(t *testing.T) {
 	if len(snap.Routes) != 2 || snap.Routes[1].PathPrefix != "/socket" || snap.Routes[1].UpstreamHost != "paperless-ws" || !snap.Routes[0].TLS || !snap.Routes[1].TLS {
 		t.Fatalf("routes: %#v", snap.Routes)
 	}
-	if len(snap.Certs) != 1 || snap.Certs[0].NotAfter.IsZero() {
+	if len(snap.Certs) != 1 || snap.Certs[0].NotAfter.IsZero() || snap.Certs[0].NaturalKey() != "tls:paperless.example.com:443" {
 		t.Fatalf("certs: %#v", snap.Certs)
 	}
 }

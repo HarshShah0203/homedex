@@ -186,7 +186,7 @@ func applyHosts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 		seen[h.NaturalKey()] = true
 		var id int64
 		var oldName, oldKind, oldAddress, oldOS, oldArch, oldState string
-		err := tx.QueryRowContext(ctx, `SELECT id,name,kind,address,os,arch,state FROM hosts WHERE natural_key=?`, h.NaturalKey()).Scan(&id, &oldName, &oldKind, &oldAddress, &oldOS, &oldArch, &oldState)
+		err := tx.QueryRowContext(ctx, `SELECT id,name,kind,address,os,arch,state FROM hosts WHERE connector_id=? AND natural_key=?`, connectorID, h.NaturalKey()).Scan(&id, &oldName, &oldKind, &oldAddress, &oldOS, &oldArch, &oldState)
 		switch err {
 		case sql.ErrNoRows:
 			r, e := tx.ExecContext(ctx, `INSERT INTO hosts(connector_id,natural_key,name,kind,address,os,arch,notes,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, h.NaturalKey(), h.Name, h.Kind, h.Address, h.OS, h.Arch, h.Notes, now, now, now, now)
@@ -238,7 +238,7 @@ func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, no
 		}
 		var id int64
 		var oldName, oldStack, oldImage, oldTag, oldDigest, oldState string
-		err := tx.QueryRowContext(ctx, `SELECT id,name,stack,image,tag,digest,state FROM services WHERE natural_key=?`, s.NaturalKey()).Scan(&id, &oldName, &oldStack, &oldImage, &oldTag, &oldDigest, &oldState)
+		err := tx.QueryRowContext(ctx, `SELECT id,name,stack,image,tag,digest,state FROM services WHERE connector_id=? AND natural_key=?`, connectorID, s.NaturalKey()).Scan(&id, &oldName, &oldStack, &oldImage, &oldTag, &oldDigest, &oldState)
 		if err == sql.ErrNoRows {
 			var recreatedKey string
 			recreated := false
@@ -360,13 +360,17 @@ func applyRoutes(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now 
 		var id int64
 		var oldHost, oldStatus, oldState string
 		var oldPort int
-		err := tx.QueryRowContext(ctx, `SELECT id,upstream_host,COALESCE(upstream_port,0),status,state FROM routes WHERE natural_key=?`, r.NaturalKey()).Scan(&id, &oldHost, &oldPort, &oldStatus, &oldState)
+		err := tx.QueryRowContext(ctx, `SELECT id,upstream_host,COALESCE(upstream_port,0),status,state FROM routes WHERE connector_id=? AND natural_key=?`, connectorID, r.NaturalKey()).Scan(&id, &oldHost, &oldPort, &oldStatus, &oldState)
 		var resolved any
-		if x, ok := services[r.ResolvedServiceKey]; ok {
+		resolvedConnectorID := r.ResolvedServiceConnectorID
+		if resolvedConnectorID == 0 {
+			resolvedConnectorID = connectorID
+		}
+		if x, ok := services[r.ResolvedServiceKey]; ok && resolvedConnectorID == connectorID {
 			resolved = x
 		} else if r.ResolvedServiceKey != "" {
 			var x int64
-			if e := tx.QueryRowContext(ctx, `SELECT id FROM services WHERE natural_key=?`, r.ResolvedServiceKey).Scan(&x); e == nil {
+			if e := tx.QueryRowContext(ctx, `SELECT id FROM services WHERE connector_id=? AND natural_key=?`, resolvedConnectorID, r.ResolvedServiceKey).Scan(&x); e == nil {
 				resolved = x
 			}
 		}
@@ -417,7 +421,7 @@ func applyCerts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 		}
 		var id int64
 		var oldExpiry, oldState string
-		err := tx.QueryRowContext(ctx, `SELECT id,COALESCE(not_after,''),state FROM certs WHERE natural_key=?`, key).Scan(&id, &oldExpiry, &oldState)
+		err := tx.QueryRowContext(ctx, `SELECT id,COALESCE(not_after,''),state FROM certs WHERE connector_id=? AND natural_key=?`, connectorID, key).Scan(&id, &oldExpiry, &oldState)
 		if err == sql.ErrNoRows {
 			r, e := tx.ExecContext(ctx, `INSERT INTO certs(connector_id,natural_key,subject,sans,issuer,not_after,chain_valid,source,endpoint,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, key, c.Subject, string(sans), c.Issuer, nullableString(notAfter), c.ChainValid, c.Source, c.Endpoint, now, now, now, now)
 			if e != nil {
@@ -467,7 +471,7 @@ func applyDomains(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now
 		}
 		var id int64
 		var oldExpiry, oldState string
-		err := tx.QueryRowContext(ctx, `SELECT id,COALESCE(expires_at,''),state FROM domains WHERE natural_key=?`, key).Scan(&id, &oldExpiry, &oldState)
+		err := tx.QueryRowContext(ctx, `SELECT id,COALESCE(expires_at,''),state FROM domains WHERE connector_id=? AND natural_key=?`, connectorID, key).Scan(&id, &oldExpiry, &oldState)
 		if err == sql.ErrNoRows {
 			r, e := tx.ExecContext(ctx, `INSERT INTO domains(connector_id,natural_key,name,registrar,expires_at,nameservers,source,last_checked,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, key, d.Name, d.Registrar, nullableString(expiry), string(ns), d.Source, checked, now, now, now, now)
 			if e != nil {

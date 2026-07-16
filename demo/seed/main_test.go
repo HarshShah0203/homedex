@@ -61,9 +61,29 @@ func TestFakeLabSnapshotIsDeterministicAndSecretFree(t *testing.T) {
 
 func TestFakeLabRoutesExerciseResolutionOutcomes(t *testing.T) {
 	snapshot := fakeLabSnapshot()
-	routes := resolve.Routes(snapshot.Routes, resolve.Inventory{
-		Hosts: snapshot.Hosts, Services: snapshot.Services, Ports: snapshot.Ports,
-	})
+	const connectorID = 1
+	inv := resolve.Inventory{}
+	for _, host := range snapshot.Hosts {
+		inv.Hosts = append(inv.Hosts, resolve.Host{Ref: resolve.EntityRef{ConnectorID: connectorID, Key: host.NaturalKey()}, Name: host.Name, Address: host.Address})
+	}
+	for _, service := range snapshot.Services {
+		inv.Services = append(inv.Services, resolve.Service{
+			Ref:      resolve.EntityRef{ConnectorID: connectorID, Key: service.NaturalKey()},
+			HostRef:  resolve.EntityRef{ConnectorID: connectorID, Key: service.HostKey},
+			Name:     service.Name,
+			Networks: service.Networks,
+		})
+	}
+	for _, port := range snapshot.Ports {
+		inv.Ports = append(inv.Ports, resolve.Port{
+			ServiceRef:    resolve.EntityRef{ConnectorID: connectorID, Key: port.ServiceKey},
+			HostRef:       resolve.EntityRef{ConnectorID: connectorID, Key: port.HostKey},
+			Number:        port.Number,
+			ContainerPort: port.ContainerPort,
+			Published:     port.Published,
+		})
+	}
+	routes := resolve.Routes(snapshot.Routes, inv)
 	statuses := map[string]int{}
 	confidences := map[string]int{}
 	for _, item := range routes {
