@@ -1,0 +1,9 @@
+export type EntityType = 'service' | 'host' | 'route' | 'port' | 'expiry' | 'change';
+export type Service = { id: number; name: string; state: string; host: string; host_id?: number; stack: string; image: string; tag: string; ports: string; route: string; last_seen: string; uptime?: string };
+export type Host = { id: number; name: string; kind: string; address: string; os: string; arch: string; state: string; services?: number; ports?: number; last_seen?: string };
+export type Port = { id: number; service_id: number; host_id: number; number: number; protocol: string; published: boolean | number; host_ip: string; container_port: number; source: string; service?: string; host?: string };
+export type Route = { id: number; domain: string; path_prefix: string; upstream_host: string; upstream_port: number; resolve_confidence: string; tls: boolean | number; status: string; state: string; proxy?: string; service?: string; certDays?: number };
+export type Expiry = { id: number; name: string; type: string; authority: string; expires: string; days: number | null; status: string; checked: string };
+export type Change = { id: number; scan_run_id: number; entity_type: string; entity_id: number; change_kind: string; summary: string; diff: string; seen: boolean | number; created_at: string; detail?: string };
+export type Connector = { id:number; kind:string; name:string; enabled:boolean; schedule_minutes:number; last_status:string; last_error:string; created_at?:string; updated_at?:string; endpoint?:string; found?:string };
+export type DrawerEntity = { type: EntityType; title: string; subtitle?: string; data: Record<string, unknown> };
