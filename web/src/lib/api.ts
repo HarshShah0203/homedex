@@ -106,7 +106,7 @@ export async function createConnector(input: ConnectorInput): Promise<ConnectorM
 }
 
 export async function updateConnector(id: number, input: Partial<ConnectorInput>): Promise<ConnectorMutation> {
-  return requestJSON(`/api/connectors/${id}`, { method: 'PATCH', body: input });
+  return requestJSON(`/api/connectors/${id}`, { method: 'PATCH', body: input, acceptedStatuses: [502] });
 }
 
 export async function deleteConnector(id: number): Promise<void> {

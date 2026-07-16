@@ -68,7 +68,7 @@
         </div>
       </main>
     {:else}
-      <Pages path={$route} {inventory} />
+      <Pages path={$route} {inventory} onrefresh={refresh} />
     {/if}
   </Shell>
   <CommandPalette bind:open={paletteOpen} {inventory} />

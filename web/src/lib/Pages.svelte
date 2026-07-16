@@ -11,7 +11,7 @@
   import PageHead from './PageHead.svelte';
   import { navigate } from './router';
 
-  let { path, inventory }: { path: string; inventory: Inventory } = $props();
+  let { path, inventory, onrefresh = async () => {} }: { path: string; inventory: Inventory; onrefresh?: () => Promise<void> } = $props();
   let pathname = $derived(path.split('?')[0]);
   let issueSummary = $derived(inventory.issues.map((issue) => `${issue.resource}: ${issue.message}`).join(' '));
 </script>
@@ -39,7 +39,7 @@
 {:else if pathname === '/copy-my-lab' || pathname === '/settings/export'}
   <CopyLabPage />
 {:else if pathname === '/sources' || pathname.startsWith('/settings/connectors')}
-  <SourcesPage {inventory} />
+  <SourcesPage {inventory} {onrefresh} />
 {:else}
   <main class="page">
     <PageHead kicker="INDEX · MISSING RECORD" title="That register does not exist." copy="The address may be stale, or this version of Homedex does not expose that record." />
