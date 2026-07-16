@@ -46,11 +46,11 @@ export function buildSearchGroups(inventory: Inventory, rawQuery: string): Searc
     if (!route.domain.toLowerCase().includes(query) && !connected) return [];
     return [{
       group: 'Routes',
-      title: route.domain,
+      title: `${route.domain}${route.path_prefix && route.path_prefix !== '/' ? route.path_prefix : ''}`,
       meta: `RTE-${String(route.id).padStart(3, '0')} · ${route.proxy ?? 'Observed proxy'}`,
       reason: connected ? `Connected to ${connected}` : `Public name contains ‘${query}’`,
       state: route.status === 'broken' ? 'broken' : 'resolved',
-      href: `/routes/${encodeURIComponent(route.domain)}`
+      href: `/routes/${route.id}`
     }];
   });
 

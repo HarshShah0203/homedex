@@ -21,7 +21,7 @@
 
 <main class="page">
   <PageHead kicker="INDEX · HOSTS" title="Where the address book lives." copy={`${hosts.length} observed Docker hosts, presented as source records rather than monitoring nodes.`}>
-    {#snippet actions()}<button class="quiet-button">Export hosts</button><button class="primary-button" onclick={() => navigate('/sources')}>Scan sources</button>{/snippet}
+    {#snippet actions()}{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/sources')}>Manage sources</button>{/if}{/snippet}
   </PageHead>
   {#if hosts.length}
     <section class="host-grid" data-component-id="host-register">
@@ -35,7 +35,7 @@
       {/each}
     </section>
   {:else}
-    <section class="empty-register"><strong>NO HOSTS INDEXED</strong><span>Connect a Docker source to create the host register.</span><button class="primary-button" onclick={() => navigate('/sources')}>Add a source</button></section>
+    <section class="empty-register"><strong>NO HOSTS INDEXED</strong><span>{inventory.readOnly ? 'This shared inventory contains no host records.' : 'Connect a Docker source to create the host register.'}</span>{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/setup')}>Add a source</button>{/if}</section>
   {/if}
 </main>
 {#if selectedHost}<HostInspector host={selectedHost} {inventory} />{/if}

@@ -14,6 +14,23 @@ describe('buildSearchGroups', () => {
       'Declared by immich-server',
       'Hosts 2 matching records'
     ]);
+    expect(groups.find((group) => group.label === 'Routes')?.results[0].href).toBe('/routes/1');
+  });
+
+  it('keeps same-domain path routes distinct with canonical ID links', () => {
+    const inventory = createDemoInventory();
+    const base = { ...inventory.routes[0], domain: 'shared.lab.example' };
+    inventory.routes = [
+      { ...base, id: 40, path_prefix: '/app', status: 'resolved' },
+      { ...base, id: 41, path_prefix: '/admin', status: 'broken', resolved_service_id: null, service: '' }
+    ];
+
+    const routes = buildSearchGroups(inventory, 'shared.lab.example').find((group) => group.label === 'Routes')?.results;
+
+    expect(routes).toEqual([
+      expect.objectContaining({ title: 'shared.lab.example/app', href: '/routes/40', state: 'resolved' }),
+      expect.objectContaining({ title: 'shared.lab.example/admin', href: '/routes/41', state: 'broken' })
+    ]);
   });
 
   it('returns no groups for an empty query', () => {

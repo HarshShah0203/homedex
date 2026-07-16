@@ -11,14 +11,12 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="EXPIRY · FORWARD REGISTER" title="What needs a date, gets a date." copy="Certificates, domains, and manual obligations share one chronological register.">
-    {#snippet actions()}<button class="quiet-button">Add manual expiry</button><button class="primary-button">Export calendar</button>{/snippet}
-  </PageHead>
+  <PageHead kicker="EXPIRY · FORWARD REGISTER" title="What needs a date, gets a date." copy="Certificates, domains, and manual obligations share one chronological register." />
   {#if rows.length}
     <div class="summary-line"><strong>{urgent.length} records inside 30 days</strong><span>Next: {rows[0].name} · {rows[0].days_remaining ?? 'unknown'} days</span><span>Last checked {lastChecked}</span></div>
     <div class="timeline" data-component-id="expiry-horizon" aria-label="Ninety day expiry horizon">{#each rows.filter((record) => record.days_remaining !== null && record.days_remaining <= 90) as record}<i style={`left:${Math.min(99, Math.max(0, Number(record.days_remaining) / 90 * 100))}%`}></i>{/each}</div>
   {/if}
-  <div class="toolbar"><button class="filter-button"><b>Type</b><span>All</span>⌄</button><button class="filter-button"><b>Window</b><span>180 days</span>⌄</button><button class="filter-button"><b>State</b><span>Current</span>⌄</button><span class="spacer"></span><span class="toolbar-meta">{rows.length} VISIBLE · SORTED SOONEST</span></div>
+  <div class="toolbar"><span class="toolbar-meta">{rows.length} VISIBLE · SORTED SOONEST</span></div>
   <section class="register" data-component-id="expiry-register">
     <header class="register-head expiry-cols"><span>Record</span><span>Type</span><span>Authority</span><span>Expires</span><span>Window</span></header>
     {#if rows.length}

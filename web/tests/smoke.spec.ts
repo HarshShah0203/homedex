@@ -9,7 +9,7 @@ test('renders every approved register and both route evidence outcomes', async (
     ['/', 'Everything, in its place.'],
     ['/hosts', 'Where the address book lives.'],
     ['/routes', 'photos.lab.example'],
-    ['/routes/old.lab.example', 'old.lab.example'],
+    ['/routes/7', 'old.lab.example'],
     ['/ports', 'Know what is already spoken for.'],
     ['/expiry', 'What needs a date, gets a date.'],
     ['/changes', 'What changed, without the alarm theatre.'],
@@ -24,10 +24,10 @@ test('renders every approved register and both route evidence outcomes', async (
     await expectNoHorizontalOverflow(page);
   }
 
-  await page.goto('/routes/old.lab.example');
+  await page.goto('/routes/7');
   await expect(page.getByText('Broken · no match')).toBeVisible();
   await expect(page.getByText('TLS FACT')).toBeVisible();
-  await page.goto('/routes/photos.lab.example');
+  await page.goto('/routes/1');
   await expect(page.getByText('Resolved · high confidence')).toBeVisible();
   await expect(page.getByText('JOIN RESULT')).toBeVisible();
 
@@ -126,7 +126,7 @@ test('supports light theme, keyboard focus, reduced motion, and overflow-free re
 
   for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 900 }, { width: 1440, height: 900 }]) {
     await page.setViewportSize(viewport);
-    for (const path of ['/', '/routes/old.lab.example', '/ports', '/copy-my-lab', '/sources']) {
+    for (const path of ['/', '/routes/7', '/ports', '/copy-my-lab', '/sources']) {
       await page.goto(path);
       await expect(page.locator('.page, .setup-page').first()).toBeVisible();
       await expectNoHorizontalOverflow(page);

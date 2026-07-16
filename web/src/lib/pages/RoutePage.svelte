@@ -4,8 +4,8 @@
   import { navigate } from '../router';
 
   let { path, inventory }: { path: string; inventory: Inventory } = $props();
-  let domain = $derived(routeDomain(path));
-  let route = $derived(inventory.routes.find((item) => item.domain === domain) ?? (domain ? undefined : inventory.routes[0]));
+  let routeID = $derived(routeRecordID(path));
+  let route = $derived(inventory.routes.find((item) => item.id === routeID) ?? (routeID ? undefined : inventory.routes[0]));
   let state = $derived(route ? routeState(route) : 'missing');
   let resolved = $derived(state === 'resolved');
   let facts = $derived(route ? routeFacts(route) : []);
@@ -29,14 +29,10 @@
     return 'Broken · no match';
   }
 
-  function routeDomain(value: string): string {
+  function routeRecordID(value: string): number {
     const pathname = value.split('?')[0];
-    const encoded = pathname.startsWith('/routes/') ? pathname.slice('/routes/'.length).split('/')[0] : '';
-    try {
-      return decodeURIComponent(encoded);
-    } catch {
-      return encoded;
-    }
+    const segment = pathname.startsWith('/routes/') ? pathname.slice('/routes/'.length).split('/')[0] : '';
+    return /^\d+$/.test(segment) ? Number(segment) : 0;
   }
 
   function record(prefix: string, id: number | null | undefined): string {
@@ -81,7 +77,7 @@
 {#if route}
   <main class="page">
     <PageHead kicker="ROUTES · RECORD DETAIL" title={route.domain} copy="A route is a join between separately observed proxy and inventory facts.">
-      {#snippet actions()}<button class="quiet-button" onclick={copyEvidence}>Copy evidence</button><button class="primary-button" onclick={() => navigate('/sources')}>Open source</button>{/snippet}
+      {#snippet actions()}<button class="quiet-button" onclick={copyEvidence}>Copy evidence</button>{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/sources')}>Open source</button>{/if}{/snippet}
     </PageHead>
     <section class="route-strip" data-component-id="route-resolution-ledger">
       <div class="route-step"><span>PUBLIC NAME</span><strong>{route.domain}</strong><code>{route.tls ? 'HTTPS' : 'HTTP'} · {route.path_prefix || '/'}</code></div>
@@ -102,6 +98,6 @@
 {:else}
   <main class="page">
     <PageHead kicker={routeIssue ? 'ROUTES · RESOURCE UNAVAILABLE' : 'ROUTES · MISSING RECORD'} title={routeIssue ? 'Routes could not be loaded.' : 'That route does not exist.'} copy={routeIssue?.message || 'The public name is not present in the current route register.'} />
-    <section class="empty-register"><strong>{routeIssue ? 'ROUTE DATA UNAVAILABLE' : 'NO CURRENT RECORD'}</strong><span>{routeIssue?.message || domain || 'No route selected'}</span><button class="primary-button" onclick={() => navigate('/')}>Return to the index</button></section>
+    <section class="empty-register"><strong>{routeIssue ? 'ROUTE DATA UNAVAILABLE' : 'NO CURRENT RECORD'}</strong><span>{routeIssue?.message || (routeID ? `Route ${routeID}` : 'No route selected')}</span><button class="primary-button" onclick={() => navigate('/')}>Return to the index</button></section>
   </main>
 {/if}
