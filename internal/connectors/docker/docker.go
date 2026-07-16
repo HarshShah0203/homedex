@@ -2,7 +2,6 @@ package docker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -45,12 +44,8 @@ func New() *Connector             { return &Connector{newClient: newClient} }
 func (c *Connector) Kind() string { return "docker" }
 
 func decode(raw connectors.Config) (Config, error) {
-	b, err := json.Marshal(raw)
+	cfg, err := connectors.DecodeConfig[Config](raw)
 	if err != nil {
-		return Config{}, err
-	}
-	var cfg Config
-	if err = json.Unmarshal(b, &cfg); err != nil {
 		return cfg, err
 	}
 	if cfg.Endpoint == "" {

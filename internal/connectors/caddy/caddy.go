@@ -17,11 +17,10 @@ type Connector struct{ Client *http.Client }
 func New() *Connector           { return &Connector{http.DefaultClient} }
 func (*Connector) Kind() string { return "caddy" }
 func endpoint(raw connectors.Config) (string, error) {
-	b, _ := json.Marshal(raw)
-	var x struct {
+	x, e := connectors.DecodeConfig[struct {
 		URL string `json:"url"`
-	}
-	if e := json.Unmarshal(b, &x); e != nil {
+	}](raw)
+	if e != nil {
 		return "", e
 	}
 	if x.URL == "" {

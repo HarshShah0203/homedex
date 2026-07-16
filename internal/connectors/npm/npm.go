@@ -29,9 +29,7 @@ type config struct {
 }
 
 func decode(raw connectors.Config) (config, error) {
-	b, _ := json.Marshal(raw)
-	var x config
-	e := json.Unmarshal(b, &x)
+	x, e := connectors.DecodeConfig[config](raw)
 	if x.URL == "" || x.Email == "" || x.Password == "" {
 		e = fmt.Errorf("url, email, and password are required")
 	}

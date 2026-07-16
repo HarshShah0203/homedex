@@ -11,6 +11,20 @@ import (
 
 type Config map[string]json.RawMessage
 
+// DecodeConfig converts the connector framework's raw JSON config into a
+// connector-specific typed config while preserving JSON decoding errors.
+func DecodeConfig[T any](cfg Config) (T, error) {
+	var decoded T
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return decoded, err
+	}
+	if err = json.Unmarshal(b, &decoded); err != nil {
+		return decoded, err
+	}
+	return decoded, nil
+}
+
 type Connector interface {
 	Kind() string
 	Validate(context.Context, Config) error

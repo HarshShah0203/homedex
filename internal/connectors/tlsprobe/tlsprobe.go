@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -30,9 +29,7 @@ type config struct {
 }
 
 func parse(raw connectors.Config) (config, error) {
-	b, _ := json.Marshal(raw)
-	var x config
-	e := json.Unmarshal(b, &x)
+	x, e := connectors.DecodeConfig[config](raw)
 	if len(x.Targets) == 0 {
 		return x, fmt.Errorf("at least one target is required")
 	}

@@ -27,9 +27,8 @@ type config struct {
 }
 
 func cfg(raw connectors.Config) (config, error) {
-	b, _ := json.Marshal(raw)
-	var c config
-	if err := json.Unmarshal(b, &c); err != nil {
+	c, err := connectors.DecodeConfig[config](raw)
+	if err != nil {
 		return config{}, err
 	}
 	if _, err := url.ParseRequestURI(c.URL); err != nil {
