@@ -107,44 +107,13 @@ func (m *EntityManager) Patch(ctx context.Context, entityType string, id int64, 
 		}
 	}
 	if patch.Tags != nil {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM entity_tags WHERE entity_type=? AND entity_id=?`, typ, id); err != nil {
+		if err = writeEntityTags(ctx, tx, typ, id, patch.Tags, true); err != nil {
 			return err
-		}
-		seen := map[string]bool{}
-		for _, tag := range patch.Tags {
-			tag.Name = strings.TrimSpace(tag.Name)
-			if tag.Name == "" || seen[tag.Name] {
-				continue
-			}
-			seen[tag.Name] = true
-			if _, err = tx.ExecContext(ctx, `INSERT INTO tags(name,color) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET color=CASE WHEN excluded.color='' THEN tags.color ELSE excluded.color END`, tag.Name, tag.Color); err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO entity_tags(tag_id,entity_type,entity_id) SELECT id,?,? FROM tags WHERE name=?`, typ, id, tag.Name); err != nil {
-				return err
-			}
 		}
 	}
 	if patch.CustomFields != nil {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM custom_fields WHERE entity_type=? AND entity_id=?`, typ, id); err != nil {
+		if err = writeCustomFields(ctx, tx, typ, id, patch.CustomFields, true); err != nil {
 			return err
-		}
-		seen := map[string]bool{}
-		for _, field := range patch.CustomFields {
-			field.Key = strings.TrimSpace(field.Key)
-			if field.Key == "" {
-				return errors.New("custom field key is required")
-			}
-			if seen[field.Key] {
-				return fmt.Errorf("duplicate custom field %q", field.Key)
-			}
-			seen[field.Key] = true
-			if !validFieldKind(field.Kind) {
-				return fmt.Errorf("unsupported custom field kind %q", field.Kind)
-			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO custom_fields(entity_type,entity_id,key,kind,value) VALUES(?,?,?,?,?)`, typ, id, field.Key, field.Kind, field.Value); err != nil {
-				return err
-			}
 		}
 	}
 	return tx.Commit()
@@ -235,7 +204,7 @@ func (m *EntityManager) CreateManual(ctx context.Context, in ManualEntityInput) 
 	if err != nil {
 		return EntityDetail{}, err
 	}
-	if err = patchMetadataTx(ctx, tx, typ, id, in.Notes, in.Tags, in.CustomFields, now); err != nil {
+	if err = insertInitialMetadata(ctx, tx, typ, id, in.Notes, in.Tags, in.CustomFields, now); err != nil {
 		return EntityDetail{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -391,33 +360,89 @@ func requireEntity(ctx context.Context, tx *sql.Tx, table string, id int64) erro
 	return nil
 }
 
-func patchMetadataTx(ctx context.Context, tx *sql.Tx, typ string, id int64, notes string, tags []TagInput, fields []CustomFieldInput, now string) error {
+func insertInitialMetadata(ctx context.Context, tx *sql.Tx, typ string, id int64, notes string, tags []TagInput, fields []CustomFieldInput, now string) error {
 	if notes != "" {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO entity_notes(entity_type,entity_id,notes,updated_at) VALUES(?,?,?,?)`, typ, id, notes, now); err != nil {
 			return err
 		}
 	}
-	for _, tag := range tags {
-		tag.Name = strings.TrimSpace(tag.Name)
-		if tag.Name == "" {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO tags(name,color) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET color=CASE WHEN excluded.color='' THEN tags.color ELSE excluded.color END`, tag.Name, tag.Color); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO entity_tags(tag_id,entity_type,entity_id) SELECT id,?,? FROM tags WHERE name=?`, typ, id, tag.Name); err != nil {
+	if err := writeEntityTags(ctx, tx, typ, id, tags, false); err != nil {
+		return err
+	}
+	return writeCustomFields(ctx, tx, typ, id, fields, false)
+}
+
+func writeEntityTags(ctx context.Context, tx *sql.Tx, typ string, id int64, inputs []TagInput, replace bool) error {
+	tags := normalizeTags(inputs)
+	if replace {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM entity_tags WHERE entity_type=? AND entity_id=?`, typ, id); err != nil {
 			return err
 		}
 	}
-	for _, field := range fields {
-		if strings.TrimSpace(field.Key) == "" || !validFieldKind(field.Kind) {
-			return errors.New("custom fields require a key and a supported kind")
+	for _, tag := range tags {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO tags(name,color) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET color=CASE WHEN excluded.color='' THEN tags.color ELSE excluded.color END`, tag.Name, tag.Color); err != nil {
+			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO custom_fields(entity_type,entity_id,key,kind,value) VALUES(?,?,?,?,?)`, typ, id, field.Key, field.Kind, field.Value); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO entity_tags(tag_id,entity_type,entity_id) SELECT id,?,? FROM tags WHERE name=?`, typ, id, tag.Name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func normalizeTags(inputs []TagInput) []TagInput {
+	tags := make([]TagInput, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, tag := range inputs {
+		tag.Name = strings.TrimSpace(tag.Name)
+		if tag.Name == "" {
+			continue
+		}
+		if _, ok := seen[tag.Name]; ok {
+			continue
+		}
+		seen[tag.Name] = struct{}{}
+		tags = append(tags, tag)
+	}
+	return tags
+}
+
+func writeCustomFields(ctx context.Context, tx *sql.Tx, typ string, id int64, inputs []CustomFieldInput, replace bool) error {
+	fields, err := normalizeCustomFields(inputs)
+	if err != nil {
+		return err
+	}
+	if replace {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM custom_fields WHERE entity_type=? AND entity_id=?`, typ, id); err != nil {
+			return err
+		}
+	}
+	for _, field := range fields {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO custom_fields(entity_type,entity_id,key,kind,value) VALUES(?,?,?,?,?)`, typ, id, field.Key, field.Kind, field.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeCustomFields(inputs []CustomFieldInput) ([]CustomFieldInput, error) {
+	fields := make([]CustomFieldInput, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, field := range inputs {
+		field.Key = strings.TrimSpace(field.Key)
+		if field.Key == "" {
+			return nil, errors.New("custom field key is required")
+		}
+		if _, ok := seen[field.Key]; ok {
+			return nil, fmt.Errorf("duplicate custom field %q", field.Key)
+		}
+		if !validFieldKind(field.Kind) {
+			return nil, fmt.Errorf("unsupported custom field kind %q", field.Kind)
+		}
+		seen[field.Key] = struct{}{}
+		fields = append(fields, field)
+	}
+	return fields, nil
 }
 
 func validFieldKind(kind string) bool {
