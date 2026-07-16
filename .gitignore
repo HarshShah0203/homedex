@@ -1,0 +1,27 @@
+# binaries & build output
+/homedex
+/dist/
+/bin/
+
+# web build
+web/node_modules/
+web/dist/
+web/.svelte-kit/
+
+# data & local state
+/data/
+*.db
+*.db-wal
+*.db-shm
+
+# env & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.log
