@@ -16,23 +16,34 @@ import (
 )
 
 type Event struct {
-	Type        string `json:"type"`
-	ConnectorID int64  `json:"connector_id,omitempty"`
-	ScanRunID   int64  `json:"scan_run_id,omitempty"`
-	Changes     int    `json:"changes,omitempty"`
-	Error       string `json:"error,omitempty"`
+	Type        string         `json:"type"`
+	ConnectorID int64          `json:"connector_id,omitempty"`
+	ScanRunID   int64          `json:"scan_run_id,omitempty"`
+	Changes     int            `json:"changes,omitempty"`
+	Error       string         `json:"error,omitempty"`
+	Phase       string         `json:"phase,omitempty"`
+	Message     string         `json:"message,omitempty"`
+	Progress    int            `json:"progress,omitempty"`
+	Stats       map[string]int `json:"stats,omitempty"`
 }
 
 type Publisher interface{ Publish(Event) }
+
+type RuleEvaluator interface {
+	Evaluate(context.Context, int64) error
+}
 
 type Applier struct {
 	store *store.Store
 	now   func() time.Time
 	pub   Publisher
+	rules RuleEvaluator
 	mu    sync.Mutex
 }
 
 func New(s *store.Store, pub Publisher) *Applier { return &Applier{store: s, now: time.Now, pub: pub} }
+
+func (a *Applier) SetRuleEvaluator(rules RuleEvaluator) { a.rules = rules }
 
 func (a *Applier) ReconcileRoutes(ctx context.Context) error {
 	a.mu.Lock()
@@ -118,7 +129,7 @@ func (a *Applier) Apply(ctx context.Context, connectorID int64, snapshot domain.
 		return 0, 0, err
 	}
 	changeCount += n
-	stats, _ := json.Marshal(map[string]int{"changes": changeCount, "hosts": len(snapshot.Hosts), "services": len(snapshot.Services)})
+	stats, _ := json.Marshal(map[string]int{"changes": changeCount, "hosts": len(snapshot.Hosts), "services": len(snapshot.Services), "ports": len(snapshot.Ports), "routes": len(snapshot.Routes), "certs": len(snapshot.Certs), "domains": len(snapshot.Domains)})
 	if _, err = tx.ExecContext(ctx, `UPDATE scan_runs SET finished_at=?,status='success',stats=? WHERE id=?`, now, stats, runID); err != nil {
 		return 0, 0, err
 	}
@@ -129,7 +140,17 @@ func (a *Applier) Apply(ctx context.Context, connectorID int64, snapshot domain.
 		return 0, 0, err
 	}
 	if a.pub != nil {
-		a.pub.Publish(Event{Type: "scan.complete", ConnectorID: connectorID, ScanRunID: runID, Changes: changeCount})
+		a.pub.Publish(Event{Type: "scan.complete", ConnectorID: connectorID, ScanRunID: runID, Changes: changeCount, Phase: "complete", Message: "Inventory scan complete", Progress: 100})
+	}
+	if a.rules != nil {
+		// Notifications are a post-commit side effect. Delivery failures must not
+		// roll back, delay, or misreport an otherwise successful inventory scan.
+		rules := a.rules
+		go func() {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = rules.Evaluate(notifyCtx, runID)
+		}()
 	}
 	return runID, changeCount, nil
 }

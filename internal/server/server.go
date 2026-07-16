@@ -15,6 +15,7 @@ import (
 	"github.com/HarshShah0203/homedex/internal/auth"
 	"github.com/HarshShah0203/homedex/internal/connectors"
 	"github.com/HarshShah0203/homedex/internal/engine"
+	"github.com/HarshShah0203/homedex/internal/notify"
 	"github.com/HarshShah0203/homedex/internal/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -30,6 +31,7 @@ type Config struct {
 	ConnectorConfigs *store.ConnectorConfigs
 	Registry         *connectors.Registry
 	Runner           *engine.Runner
+	Notifications    *notify.Manager
 }
 type Server struct {
 	store    *store.Store
@@ -40,11 +42,14 @@ type Server struct {
 	configs  *store.ConnectorConfigs
 	registry *connectors.Registry
 	runner   *engine.Runner
+	shares   *auth.ShareManager
+	entities *store.EntityManager
+	notify   *notify.Manager
 	setupMu  sync.Mutex
 }
 
 func New(s *store.Store, b *Broker, cfg Config) http.Handler {
-	x := &Server{store: s, sessions: auth.NewSessionManager(s.DB(), 24*time.Hour), broker: b, cfg: cfg, limiter: newLoginLimiter(), configs: cfg.ConnectorConfigs, registry: cfg.Registry, runner: cfg.Runner}
+	x := &Server{store: s, sessions: auth.NewSessionManager(s.DB(), 24*time.Hour), shares: auth.NewShareManager(s.DB()), entities: store.NewEntityManager(s), broker: b, cfg: cfg, limiter: newLoginLimiter(), configs: cfg.ConnectorConfigs, registry: cfg.Registry, runner: cfg.Runner, notify: cfg.Notifications}
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Timeout(75*time.Second))
 	r.Get("/api/health", x.health)
@@ -52,22 +57,45 @@ func New(s *store.Store, b *Broker, cfg Config) http.Handler {
 	r.Get("/api/setup/status", x.setupStatus)
 	r.Post("/api/setup", x.setup)
 	r.Post("/api/auth/login", x.login)
+	r.Get("/share/{token}", x.acceptShare)
 	r.Group(func(api chi.Router) {
 		api.Use(x.authenticate)
+		api.Use(x.authorizeShareScope)
 		api.Use(x.csrf)
 		api.Post("/api/auth/logout", x.logout)
-		api.Get("/api/services", x.list("services", []string{"id", "host_id", "name", "kind", "stack", "image", "tag", "state", "health", "restart_policy", "first_seen", "last_seen", "natural_key"}))
-		api.Get("/api/hosts", x.list("hosts", []string{"id", "name", "kind", "address", "os", "arch", "state", "first_seen", "last_seen", "natural_key"}))
-		api.Get("/api/ports", x.list("ports", []string{"id", "service_id", "host_id", "number", "protocol", "published", "host_ip", "container_port", "source"}))
+		api.Get("/api/summary", x.summary)
+		api.Get("/api/services", x.listServices)
+		api.Get("/api/hosts", x.listHosts)
+		api.Get("/api/ports", x.listPorts)
 		api.Get("/api/ports/conflicts", x.portConflicts)
 		api.Get("/api/ports/next-free", x.nextFreePort)
-		api.Get("/api/routes", x.list("routes", []string{"id", "proxy_id", "domain", "path_prefix", "upstream_host", "upstream_port", "resolved_service_id", "resolve_confidence", "tls", "status", "state"}))
+		api.Get("/api/routes", x.listRoutes)
 		api.Get("/api/certs", x.list("certs", []string{"id", "subject", "issuer", "not_after", "chain_valid", "source", "endpoint", "state"}))
 		api.Get("/api/domains", x.list("domains", []string{"id", "name", "registrar", "expires_at", "source", "last_checked", "state"}))
-		api.Get("/api/changes", x.list("changes", []string{"id", "scan_run_id", "entity_type", "entity_id", "change_kind", "summary", "diff", "seen", "created_at"}))
+		api.Get("/api/expiry", x.expiry)
+		api.Get("/api/changes", x.listChanges)
+		api.Patch("/api/changes", x.bulkReviewChanges)
+		api.Post("/api/changes/review", x.bulkReviewChanges)
+		api.Patch("/api/changes/{id}", x.reviewChange)
 		api.Get("/api/search", x.search)
+		api.Get("/api/entities/{type}/{id}", x.getEntity)
+		api.Patch("/api/entities/{type}/{id}", x.patchEntity)
+		api.Delete("/api/entities/{type}/{id}", x.deleteEntity)
+		api.Post("/api/entities", x.createEntity)
+		api.Get("/api/export/{format}", x.exportInventory)
+		api.Get("/api/share", x.listShares)
+		api.Post("/api/share", x.createShare)
+		api.Delete("/api/share/{id}", x.revokeShare)
+		api.Post("/api/share/{id}/revoke", x.revokeShare)
+		api.Get("/api/notify/rules", x.listNotificationRules)
+		api.Post("/api/notify/rules", x.createNotificationRule)
+		api.Put("/api/notify/rules/{id}", x.updateNotificationRule)
+		api.Patch("/api/notify/rules/{id}", x.updateNotificationRule)
+		api.Delete("/api/notify/rules/{id}", x.deleteNotificationRule)
+		api.Post("/api/notify/rules/{id}/test", x.testNotificationRule)
 		api.Get("/api/connectors", x.listConnectors)
 		api.Get("/api/connectors/{id}", x.getConnector)
+		api.Post("/api/connectors/test", x.testUnsavedConnector)
 		api.Post("/api/connectors", x.createConnector)
 		api.Put("/api/connectors/{id}", x.updateConnector)
 		api.Patch("/api/connectors/{id}", x.updateConnector)
@@ -322,7 +350,7 @@ func (s *Server) connectorScans(w http.ResponseWriter, r *http.Request) {
 func pathID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, e := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if e != nil || id <= 0 {
-		http.Error(w, "invalid connector id", 400)
+		http.Error(w, "invalid id", 400)
 		return 0, false
 	}
 	return id, true
@@ -402,6 +430,30 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			extra.Close()
 		}
 	}
+	metadata, err := s.store.DB().QueryContext(r.Context(), `
+		SELECT entity_type,entity_id,entity_type||' #'||entity_id,notes FROM entity_notes WHERE notes LIKE ?
+		UNION ALL
+		SELECT cf.entity_type,cf.entity_id,cf.entity_type||' #'||cf.entity_id,cf.key||': '||cf.value FROM custom_fields cf WHERE cf.key LIKE ? OR cf.value LIKE ?
+		UNION ALL
+		SELECT et.entity_type,et.entity_id,et.entity_type||' #'||et.entity_id,'tag: '||t.name FROM entity_tags et JOIN tags t ON t.id=et.tag_id WHERE t.name LIKE ?
+		UNION ALL
+		SELECT 'expiry',id,name,kind||' '||authority FROM manual_expiries WHERE name LIKE ? OR authority LIKE ?
+		LIMIT 30`, like, like, like, like, like, like)
+	if err != nil {
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
+	for metadata.Next() {
+		var typ, title, body string
+		var id int64
+		if err = metadata.Scan(&typ, &id, &title, &body); err != nil {
+			metadata.Close()
+			http.Error(w, "database error", http.StatusInternalServerError)
+			return
+		}
+		out = append(out, map[string]any{"entity_type": typ, "entity_id": id, "title": title, "body": body, "rank": 0})
+	}
+	metadata.Close()
 	if len(out) > 50 {
 		out = out[:50]
 	}
@@ -578,24 +630,34 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.NoAuth {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal{kind: "admin"})))
 			return
 		}
-		c, err := r.Cookie("homedex_session")
-		if err != nil {
-			http.Error(w, "authentication required", 401)
+		if c, err := r.Cookie("homedex_session"); err == nil {
+			if _, err = s.sessions.Validate(r.Context(), c.Value); err == nil {
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal{kind: "admin"})))
+				return
+			}
+		}
+		token := shareTokenFromRequest(r)
+		if item, err := s.shares.Validate(r.Context(), token); err == nil {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalContextKey{}, principal{kind: "share", shareID: item.ID})))
 			return
 		}
-		if _, err = s.sessions.Validate(r.Context(), c.Value); err != nil {
-			http.Error(w, "authentication required", 401)
-			return
-		}
-		next.ServeHTTP(w, r)
+		http.Error(w, "authentication required", http.StatusUnauthorized)
 	})
 }
 func (s *Server) csrf(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.NoAuth || r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if isShareRequest(r) {
+			http.Error(w, "share tokens are read-only", http.StatusForbidden)
+			return
+		}
+		if s.cfg.NoAuth {
 			next.ServeHTTP(w, r)
 			return
 		}

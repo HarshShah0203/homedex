@@ -10,6 +10,13 @@ import (
 	"github.com/HarshShah0203/homedex/internal/store"
 )
 
+type captureRuleEvaluator struct{ runs chan int64 }
+
+func (c captureRuleEvaluator) Evaluate(_ context.Context, runID int64) error {
+	c.runs <- runID
+	return nil
+}
+
 func TestApplyIsIdempotentAndMarksMissingEntitiesGone(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
@@ -180,5 +187,34 @@ func TestApplyDoesNotCollapseComposeReplicas(t *testing.T) {
 	_ = st.DB().QueryRow(`SELECT COUNT(*) FROM services WHERE name='web'`).Scan(&count)
 	if count != 2 {
 		t.Fatalf("replica count=%d", count)
+	}
+}
+
+func TestApplyEvaluatesNotificationRulesAfterCommit(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, _ := st.CreateConnector(ctx, "fixture", "Fixture", nil)
+	applier := New(st, nil)
+	runs := make(chan int64, 1)
+	applier.SetRuleEvaluator(captureRuleEvaluator{runs: runs})
+	runID, _, err := applier.Apply(ctx, id, domain.Snapshot{Services: []domain.Service{{Key: "svc", Name: "app"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case evaluated := <-runs:
+		if evaluated != runID {
+			t.Fatalf("evaluated run=%d, want %d", evaluated, runID)
+		}
+		var status string
+		if err = st.DB().QueryRow(`SELECT status FROM scan_runs WHERE id=?`, evaluated).Scan(&status); err != nil || status != "success" {
+			t.Fatalf("notification ran before committed success: status=%q error=%v", status, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("notification rules were not evaluated")
 	}
 }

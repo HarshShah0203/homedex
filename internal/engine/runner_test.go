@@ -102,8 +102,17 @@ func TestRunnerRecordsFailureAndRetainsPreviousData(t *testing.T) {
 	if failed != 1 {
 		t.Fatalf("failed runs=%d", failed)
 	}
-	if len(pub.events) != 4 || pub.events[0].Type != "scan.started" || pub.events[1].Type != "scan.complete" || pub.events[3].Type != "scan.failed" || pub.events[3].Error != "upstream unavailable" {
+	if len(pub.events) < 6 || pub.events[0].Type != "scan.started" || pub.events[len(pub.events)-1].Type != "scan.failed" || pub.events[len(pub.events)-1].Error != "upstream unavailable" {
 		t.Fatalf("events=%#v", pub.events)
+	}
+	foundComplete := false
+	foundStats := false
+	for _, event := range pub.events {
+		foundComplete = foundComplete || event.Type == "scan.complete"
+		foundStats = foundStats || event.Type == "scan.progress" && event.Phase == "discover" && event.Stats["services"] == 1
+	}
+	if !foundComplete || !foundStats {
+		t.Fatalf("missing complete or rich progress event: %#v", pub.events)
 	}
 }
 func TestRunnerAddsDiscoveredRouteTargets(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"github.com/HarshShah0203/homedex/internal/connectors/tlsprobe"
 	"github.com/HarshShah0203/homedex/internal/connectors/traefik"
 	"github.com/HarshShah0203/homedex/internal/engine"
+	"github.com/HarshShah0203/homedex/internal/notify"
 	"github.com/HarshShah0203/homedex/internal/server"
 	"github.com/HarshShah0203/homedex/internal/store"
 )
@@ -65,11 +66,13 @@ func run() error {
 	}
 	configs := store.NewConnectorConfigs(st, box)
 	applier := engine.New(st, broker)
+	notifications := notify.NewManager(st, notify.ShoutrrrSender{})
+	applier.SetRuleEvaluator(notifications)
 	runner := engine.NewRunner(st, configs, registry, applier)
 	appCtx, cancelApp := context.WithCancel(context.Background())
 	defer cancelApp()
 	go engine.NewScheduler(runner).Run(appCtx)
-	handler := server.New(st, broker, server.Config{Version: version, NoAuth: envBool("HOMEDEX_NO_AUTH", false), SecureCookies: envBool("HOMEDEX_SECURE_COOKIES", false), ConnectorConfigs: configs, Registry: registry, Runner: runner})
+	handler := server.New(st, broker, server.Config{Version: version, NoAuth: envBool("HOMEDEX_NO_AUTH", false), SecureCookies: envBool("HOMEDEX_SECURE_COOKIES", false), ConnectorConfigs: configs, Registry: registry, Runner: runner, Notifications: notifications})
 	httpServer := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 60 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {

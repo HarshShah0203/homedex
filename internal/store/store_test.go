@@ -42,4 +42,11 @@ func TestOpenAppliesMigrationAndPragmas(t *testing.T) {
 	if networks != 1 {
 		t.Fatal("service_networks migration was not applied")
 	}
+	var productTables int
+	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('entity_notes','manual_expiries','notification_deliveries')`).Scan(&productTables); err != nil {
+		t.Fatal(err)
+	}
+	if productTables != 3 {
+		t.Fatalf("created %d product tables, want 3", productTables)
+	}
 }

@@ -59,12 +59,14 @@ func (r *Runner) Scan(ctx context.Context, id int64) (int64, int, error) {
 	defer cancel()
 	started := time.Now().UTC()
 	_, _ = r.Store.DB().ExecContext(ctx, `UPDATE connectors SET last_status='running',last_error='',updated_at=? WHERE id=?`, started.Format(time.RFC3339Nano), id)
-	r.publish(Event{Type: "scan.started", ConnectorID: id})
+	r.publish(Event{Type: "scan.started", ConnectorID: id, Phase: "connect", Message: "Connecting to read-only source", Progress: 5})
 	snap, e := c.Scan(tctx, cfg)
 	if e != nil {
 		r.failed(ctx, id, started, e)
 		return 0, 0, e
 	}
+	stats := map[string]int{"hosts": len(snap.Hosts), "services": len(snap.Services), "ports": len(snap.Ports), "routes": len(snap.Routes), "certs": len(snap.Certs), "domains": len(snap.Domains)}
+	r.publish(Event{Type: "scan.progress", ConnectorID: id, Phase: "discover", Message: "Discovery complete", Progress: 60, Stats: stats})
 	if rec.Kind == "traefik" || rec.Kind == "caddy" || rec.Kind == "npm" {
 		if proxyID, pe := r.ensureProxy(ctx, id, rec.Kind, cfg); pe == nil {
 			for i := range snap.Routes {
@@ -76,6 +78,7 @@ func (r *Runner) Scan(ctx context.Context, id int64) (int64, int, error) {
 		}
 	}
 	if len(snap.Routes) > 0 {
+		r.publish(Event{Type: "scan.progress", ConnectorID: id, Phase: "resolve", Message: "Resolving routes to services", Progress: 75, Stats: stats})
 		inv, ie := resolve.LoadInventory(ctx, r.Store.DB())
 		if ie != nil {
 			r.failed(ctx, id, started, ie)
@@ -83,6 +86,7 @@ func (r *Runner) Scan(ctx context.Context, id int64) (int64, int, error) {
 		}
 		snap.Routes = resolve.Routes(snap.Routes, inv)
 	}
+	r.publish(Event{Type: "scan.progress", ConnectorID: id, Phase: "persist", Message: "Saving inventory and computing changes", Progress: 85, Stats: stats})
 	run, changes, e := r.Applier.Apply(ctx, id, snap)
 	if e != nil {
 		r.failed(ctx, id, started, e)
