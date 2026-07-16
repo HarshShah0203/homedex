@@ -51,4 +51,21 @@ describe('operational page actions', () => {
     expect(screen.queryByRole('button', { name: /Mark .* reviewed/ })).not.toBeInTheDocument();
     expect(screen.getAllByText('READ ONLY').length).toBeGreaterThan(0);
   });
+
+  it('renders readable factual differences from object diffs without a detail field', () => {
+    const inventory = createDemoInventory();
+    inventory.source = 'api';
+    inventory.changes = [
+      { id: 10, scan_run_id: 1, entity_type: 'domain', entity_id: 1, change_kind: 'added', summary: 'Domain lab.example discovered', diff: { expires_at: '2027-02-18T00:00:00Z' }, seen: false, created_at: '2026-07-16T12:20:59Z' },
+      { id: 11, scan_run_id: 1, entity_type: 'service', entity_id: 2, change_kind: 'modified', summary: 'Service immich changed', diff: { tag: { before: 'v1.134.0', after: 'v1.135.3' } }, seen: false, created_at: '2026-07-16T12:20:59Z' },
+      { id: 12, scan_run_id: 1, entity_type: 'ports', entity_id: 3, change_kind: 'modified', summary: 'Published ports changed', diff: { before: [], after: ['a', 'b', 'c'] }, seen: false, created_at: '2026-07-16T12:20:59Z' }
+    ];
+
+    render(ChangesPage, { props: { inventory } });
+
+    expect(screen.queryByText('[object Object]')).not.toBeInTheDocument();
+    expect(screen.getByText('expires_at 2027-02-18T00:00:00Z')).toBeInTheDocument();
+    expect(screen.getByText('tag v1.134.0 → v1.135.3')).toBeInTheDocument();
+    expect(screen.getByText('0 → 3 declarations')).toBeInTheDocument();
+  });
 });
