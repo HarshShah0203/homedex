@@ -28,23 +28,27 @@
     if (!diff || typeof diff !== 'object') return change.summary;
     const record = diff as Record<string, unknown>;
 
-    const isList = (value: unknown): value is unknown[] => Array.isArray(value);
-    if (isList(record.before) || isList(record.after)) {
-      const before = isList(record.before) ? record.before.length : 0;
-      const after = isList(record.after) ? record.after.length : 0;
+    if (Array.isArray(record.before) || Array.isArray(record.after)) {
+      const before = Array.isArray(record.before) ? record.before.length : 0;
+      const after = Array.isArray(record.after) ? record.after.length : 0;
       return `${before} → ${after} declarations`;
     }
 
     const parts = Object.entries(record).map(([field, value]) => {
       if (value && typeof value === 'object' && 'after' in (value as Record<string, unknown>)) {
         const pair = value as Record<string, unknown>;
-        const before = String(pair.before ?? '∅');
-        const after = String(pair.after ?? '∅');
-        return `${field} ${before} → ${after}`;
+        return `${field} ${formatValue(pair.before)} → ${formatValue(pair.after)}`;
       }
-      return `${field} ${String(value)}`;
+      return `${field} ${formatValue(value)}`;
     });
     return parts.length ? parts.join(' · ') : change.summary;
+  }
+
+  function formatValue(value: unknown): string {
+    if (value === null || value === undefined || value === '') return '∅';
+    if (Array.isArray(value)) return `${value.length} items`;
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
   }
 
   function timeLabel(created: string, index: number) {
