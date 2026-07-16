@@ -1,0 +1,80 @@
+version: 2
+
+project_name: homedex
+
+before:
+  hooks:
+    - npm --prefix web ci --ignore-scripts
+    - npm --prefix web run build
+
+builds:
+  - id: homedex
+    main: ./cmd/homedex
+    binary: homedex
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: homedex
+    ids:
+      - homedex
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- with .Arm }}v{{ . }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+      - SECURITY.md
+      - docs/CONNECTORS.md
+      - docs/BACKUP_AND_DATA.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  prerelease: auto
+  footer: |
+    Container images are published to `ghcr.io/harshshah0203/homedex`.
+    See the [upgrade and backup notes](https://github.com/HarshShah0203/homedex/blob/main/docs/BACKUP_AND_DATA.md) before replacing a running instance.

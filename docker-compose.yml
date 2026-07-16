@@ -1,0 +1,68 @@
+name: homedex
+
+services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      INFO: 1
+      NETWORKS: 1
+      VERSION: 1
+      POST: 0
+      ALLOW_START: 0
+      ALLOW_STOP: 0
+      ALLOW_RESTARTS: 0
+    volumes:
+      # `:ro` protects the socket file from replacement; POST=0 above is what
+      # filters mutating Docker API calls. A raw socket mounted read-only is
+      # still a privileged Docker API connection.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - discovery
+
+  homedex:
+    build:
+      context: .
+      target: runtime
+      args:
+        VERSION: local
+    image: homedex:local
+    restart: unless-stopped
+    depends_on:
+      - docker-socket-proxy
+    ports:
+      - "127.0.0.1:${HOMEDEX_PORT:-7377}:7377"
+    environment:
+      HOMEDEX_DATA_DIR: /data
+      HOMEDEX_LISTEN: :7377
+    volumes:
+      - homedex-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - app
+      - discovery
+
+networks:
+  app:
+    internal: false
+  discovery:
+    internal: true
+
+volumes:
+  homedex-data:

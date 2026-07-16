@@ -7,8 +7,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   go:
+    name: Go, privacy, and startup
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,8 +21,60 @@ jobs:
         with:
           go-version: '1.23.x'
           cache: true
-      - run: go test ./...
-      - run: go vet ./...
-      - run: go build -trimpath -o homedex ./cmd/homedex
+      - name: Unit and integration tests
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Privacy / redaction contract
+        run: ./scripts/check-redaction.sh
+      - name: Build release-shaped binary
+        run: go build -trimpath -buildvcs=false -ldflags='-s -w -X main.version=ci' -o homedex ./cmd/homedex
       - name: Enforce binary size budget
         run: test "$(stat -c%s homedex)" -lt 41943040
+      - name: Enforce startup budget
+        run: ./scripts/smoke-startup.sh ./homedex
+      - name: Seeded fake-lab smoke
+        run: ./scripts/smoke-fake-lab.sh ./homedex
+
+  frontend:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - name: Embedded assets are current
+        working-directory: .
+        run: git diff --exit-code -- internal/server/static
+
+  container:
+    name: Container security and size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate hardened Compose defaults
+        run: ./scripts/check-compose-security.sh
+      - uses: docker/setup-buildx-action@v3
+      - name: Build runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: homedex:ci
+          build-args: VERSION=ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Enforce image size budget
+        run: ./scripts/check-image-size.sh homedex:ci
+      - name: Runtime container smoke
+        run: ./scripts/smoke-container.sh homedex:ci

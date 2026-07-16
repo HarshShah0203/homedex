@@ -1,0 +1,7 @@
+{
+  "targets": [
+    "photos.example.net:443",
+    "https://docs.example.net"
+  ],
+  "timeout_seconds": 5
+}

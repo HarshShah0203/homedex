@@ -1,0 +1,54 @@
+name: homedex-demo
+
+services:
+  seed:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: demo-seed
+    command:
+      - --data-dir
+      - /data
+      - --reset
+    volumes:
+      - homedex-demo-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  homedex:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VERSION: demo
+    image: homedex:demo
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    environment:
+      HOMEDEX_DATA_DIR: /data
+      HOMEDEX_LISTEN: :7377
+      # The demo is bound to loopback and contains fabricated data only.
+      HOMEDEX_NO_AUTH: "true"
+    ports:
+      - "127.0.0.1:${HOMEDEX_DEMO_PORT:-7377}:7377"
+    volumes:
+      - homedex-demo-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  homedex-demo-data:
