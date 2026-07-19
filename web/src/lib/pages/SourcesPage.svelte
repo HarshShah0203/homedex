@@ -103,7 +103,7 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="Sources · Connectors" title="Sources" meta={`${inventory.connectors.length} configured`}>
+  <PageHead title="Sources" meta={`${inventory.connectors.length} configured`}>
     {#snippet actions()}{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/setup')}>Add source</button>{/if}{/snippet}
   </PageHead>
   <section class="settings-layout">

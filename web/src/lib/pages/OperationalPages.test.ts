@@ -65,7 +65,7 @@ describe('operational page actions', () => {
     render(ChangesPage, { props: { inventory } });
 
     expect(screen.queryByText(/\[object Object\]/)).not.toBeInTheDocument();
-    expect(screen.getByText('expires_at 2027-02-18T00:00:00Z')).toBeInTheDocument();
+    expect(screen.getByText('expires_at Feb 18, 2027')).toBeInTheDocument();
     expect(screen.getByText('tag v1.134.0 → v1.135.3')).toBeInTheDocument();
     expect(screen.getByText('0 → 3 declarations')).toBeInTheDocument();
     expect(screen.getByText('metadata {"owner":"lab"}')).toBeInTheDocument();

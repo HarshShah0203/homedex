@@ -104,19 +104,19 @@
 
 {#if routeID === 0}
   <main class="page">
-    <PageHead kicker="Routes · Register" title="Routes" meta={`${inventory.routes.length} routes${brokenCount ? ` · ${brokenCount} broken` : ''}`} />
+    <PageHead title="Routes" meta={`${inventory.routes.length} routes${brokenCount ? ` · ${brokenCount} broken` : ''}`} />
     {#if inventory.routes.length}
       <div class="toolbar"><input class="inline-search" bind:value={filter} aria-label="Filter routes" placeholder="Find domain, proxy, target, or service" /><span class="spacer"></span><span class="toolbar-meta">{visibleRoutes.length} VISIBLE · {inventory.routes.length} TOTAL</span></div>
       <section class="register" data-component-id="route-register">
-        <header class="register-head routes-cols"><span>Public name</span><span>Proxy</span><span>Declared target</span><span>Joined service</span><span>Cert</span></header>
+        <header class="register-head routes-cols"><span>Route</span><span>Proxy</span><span>Target</span><span>Service</span><span class="num">Cert</span></header>
         {#if visibleRoutes.length}
           {#each visibleRoutes as item}
             <a class="register-row routes-cols" href={`/routes/${item.id}`} onclick={(event) => { event.preventDefault(); navigate(`/routes/${item.id}`); }} aria-label={`Open route ${item.domain}`}>
-              <div data-label="Public name"><strong>{item.domain}</strong><small class="mono">{item.tls ? 'HTTPS' : 'HTTP'} · {item.path_prefix || '/'}</small></div>
-              <div data-label="Proxy"><strong>{item.proxy || 'Unknown'}</strong><small>{record('PRX', item.proxy_id ?? item.id)}</small></div>
-              <div data-label="Declared target"><code>{item.upstream_host}:{item.upstream_port ?? '—'}</code></div>
-              <div data-label="Joined service">{#if routeState(item) === 'resolved'}<span class="status ok">{item.service || item.upstream_host} · {item.resolve_confidence || 'unknown'}</span>{:else if routeState(item) === 'ambiguous'}<span class="status warn">Ambiguous</span>{:else if routeState(item) === 'unknown'}<span class="status warn">Unresolved</span>{:else}<span class="status bad">No match</span>{/if}</div>
-              <div data-label="Cert">{#if item.cert_expires_at}{@const days = certDays(item.cert_expires_at)}<span class={`status ${certTone(days)}`}>{days}d</span>{:else}<code>—</code>{/if}</div>
+              <div data-label="Route"><strong>{item.domain}</strong><small class="mono">{item.tls ? 'https' : 'http'} · {item.path_prefix || '/'}</small></div>
+              <div data-label="Proxy">{item.proxy || 'Unknown'}</div>
+              <div data-label="Target"><code>{item.upstream_host}:{item.upstream_port ?? '—'}</code></div>
+              <div data-label="Service">{#if routeState(item) === 'resolved'}<span class="status ok">{item.service || item.upstream_host} · {item.resolve_confidence || 'unknown'}</span>{:else if routeState(item) === 'ambiguous'}<span class="status warn">Ambiguous</span>{:else if routeState(item) === 'unknown'}<span class="status warn">Unresolved</span>{:else}<span class="status bad">No match</span>{/if}</div>
+              <div class="num" data-label="Cert">{#if item.cert_expires_at}{@const days = certDays(item.cert_expires_at)}<span class={`status ${certTone(days)}`}>{days}d</span>{:else}<code class="dim">—</code>{/if}</div>
             </a>
           {/each}
         {:else}
