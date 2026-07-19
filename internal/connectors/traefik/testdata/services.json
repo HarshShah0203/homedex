@@ -1,1 +1,1 @@
-[{"name":"immich@docker","loadBalancer":{"servers":[{"url":"http://immich-server:2283"}]}}]
+[{"name":"immich@docker","loadBalancer":{"servers":[{"url":"http://immich-server:2283"}]}},{"name":"files@file","loadBalancer":{"servers":[{"url":"http://10.0.0.5:8443"}]}},{"name":"noop@internal"}]
