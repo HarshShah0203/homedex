@@ -96,7 +96,7 @@ test('covers the highest-value seeded production workflows', async ({ page }) =>
   await page.goto('/setup');
   await expect(page.getByRole('heading', { name: 'First source', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Docker metadata, read only', level: 2 })).toBeVisible();
-  await expect(page.getByLabel('Read-only endpoint')).toHaveValue('unix:///var/run/docker.sock');
+  await expect(page.getByLabel('Read-only endpoint')).toHaveValue('tcp://docker-socket-proxy:2375');
   await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save and run first scan' })).toBeDisabled();
   expect(apiFailures).toEqual([]);
