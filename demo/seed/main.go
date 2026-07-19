@@ -86,6 +86,20 @@ func seed(ctx context.Context, dataDir string, reset bool) (fixtureStats, error)
 	if err = applier.ReconcileRoutes(ctx); err != nil {
 		return fixtureStats{}, fmt.Errorf("resolve fixture routes: %w", err)
 	}
+	// Register the reverse proxy that declared these routes so route detail
+	// names it, mirroring what the runner records for live proxy connectors.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := st.DB().ExecContext(ctx, `INSERT INTO proxies(kind,host_id,endpoint,connector_id,last_scan) SELECT 'traefik', id, 'http://traefik:8080/api', ?, ? FROM hosts WHERE name='gateway'`, connectorID, now)
+	if err != nil {
+		return fixtureStats{}, fmt.Errorf("register fixture proxy: %w", err)
+	}
+	proxyID, err := res.LastInsertId()
+	if err != nil {
+		return fixtureStats{}, fmt.Errorf("read fixture proxy id: %w", err)
+	}
+	if _, err = st.DB().ExecContext(ctx, `UPDATE routes SET proxy_id=?`, proxyID); err != nil {
+		return fixtureStats{}, fmt.Errorf("attach fixture proxy to routes: %w", err)
+	}
 	// Keep the fixture visible in Settings without allowing the scheduler to
 	// contact the intentionally non-routable placeholder endpoint.
 	if err = configs.Update(ctx, connectorID, "Fake lab fixture", config, false, 1440); err != nil {
