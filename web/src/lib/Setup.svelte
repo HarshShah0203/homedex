@@ -6,7 +6,7 @@
   import { navigate } from './router';
 
   let {
-    theme = $bindable<'dark' | 'light'>('dark'),
+    theme = $bindable<'dark' | 'light'>('light'),
     needsAdmin = false,
     oncomplete = async () => {}
   }: { theme: 'dark' | 'light'; needsAdmin?: boolean; oncomplete?: () => Promise<void> } = $props();
