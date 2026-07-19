@@ -2,7 +2,7 @@
   import { reviewChange, reviewChanges, type Inventory } from '../api';
   import type { Change } from '../types';
   import PageHead from '../PageHead.svelte';
-  import { relativeTime } from '../time';
+  import { formatDate, relativeTime } from '../time';
 
   let { inventory }: { inventory: Inventory } = $props();
   let reviewed = $state(new Set<number>());
@@ -27,7 +27,8 @@
       }
     }
     if (!diff || typeof diff !== 'object') return change.summary;
-    const record = diff as Record<string, unknown>;
+    const record = Object.fromEntries(Object.entries(diff as Record<string, unknown>).filter(([field]) => field !== 'natural_key'));
+    if (!Object.keys(record).length) return change.change_kind === 'added' ? 'new record' : change.summary;
 
     if (Array.isArray(record.before) || Array.isArray(record.after)) {
       const before = Array.isArray(record.before) ? record.before.length : 0;
@@ -49,7 +50,15 @@
     if (value === null || value === undefined || value === '') return '∅';
     if (Array.isArray(value)) return `${value.length} items`;
     if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
+    const text = String(value);
+    return /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/.test(text) ? formatDate(text) : text;
+  }
+
+  function kindLabel(change: Change): string {
+    const entity = change.entity_type === 'cert' ? 'cert' : change.entity_type || 'record';
+    if (change.change_kind === 'added') return `+ ${entity}`;
+    if (change.change_kind === 'removed') return `− ${entity}`;
+    return `${entity} updated`;
   }
 
   async function reviewOne(id: number) {
@@ -84,17 +93,17 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="Changes · Review" title="Changes" meta={`${unreviewed} unreviewed`}>
+  <PageHead title="Changes" meta={`${unreviewed} unreviewed`}>
     {#snippet actions()}{#if !inventory.readOnly && unreviewed}<button class="quiet-button" disabled={pending.size > 0} onclick={reviewAll}>Mark visible reviewed</button>{/if}{/snippet}
   </PageHead>
   {#if latest}<div class="summary-line"><strong>Scan {latest.scan_run_id} · {relativeTime(latest.created_at)}</strong><span>{unreviewed} unreviewed</span><span>{kindSummary}</span><span class={`status ${latest.scan_status === 'failed' ? 'bad' : 'ok'}`}>{latest.scan_status || 'Recorded'}</span></div>{/if}
   {#if error}<div class="source-notice" role="alert"><span class="status bad">Not saved</span><p>{error}</p></div>{/if}
   <div class="toolbar"><span class="toolbar-meta">{changes.length} VISIBLE · NEWEST FIRST</span></div>
   <section class="register" data-component-id="change-register">
-    <header class="register-head change-cols"><span>Observed</span><span>Record</span><span>Factual difference</span><span>Kind</span><span>Review</span></header>
+    <header class="register-head change-cols"><span>Observed</span><span>Record</span><span>Change</span><span>Kind</span><span class="num">Review</span></header>
     {#if changes.length}
       {#each changes as change}
-        <div class:unreviewed-row={!Boolean(change.seen) && !reviewed.has(change.id)} class="register-row change-cols"><div class="mono" data-label="Observed">{relativeTime(change.created_at)}</div><div data-label="Record"><strong>{change.summary}</strong><small>CHG-{String(change.id).padStart(3, '0')} · {Boolean(change.seen) || reviewed.has(change.id) ? 'reviewed' : 'unreviewed'}</small></div><div data-label="Factual difference"><code>{diffLabel(change)}</code></div><div data-label="Kind"><span class:ok={change.change_kind === 'added'} class:bad={change.change_kind === 'removed'} class:warn={change.change_kind === 'modified'} class="status">{change.change_kind === 'added' ? '+ service' : change.change_kind === 'removed' ? '− service' : change.entity_type === 'port' ? 'port map' : change.entity_type === 'cert' ? 'expiry' : 'image tag'}</span></div><div data-label="Review">{#if inventory.readOnly}<span class="mono">{change.seen ? 'REVIEWED' : 'READ ONLY'}</span>{:else}<button class="review-check" disabled={pending.has(change.id) || Boolean(change.seen) || reviewed.has(change.id)} aria-label={`Mark ${change.summary} reviewed`} aria-pressed={Boolean(change.seen) || reviewed.has(change.id)} onclick={() => reviewOne(change.id)}>{Boolean(change.seen) || reviewed.has(change.id) ? '✓' : ''}</button>{/if}</div></div>
+        <div class:unreviewed-row={!Boolean(change.seen) && !reviewed.has(change.id)} class="register-row change-cols"><div class="mono" data-label="Observed">{relativeTime(change.created_at)}</div><div data-label="Record"><strong>{change.summary}</strong><small>CHG-{String(change.id).padStart(3, '0')} · {Boolean(change.seen) || reviewed.has(change.id) ? 'reviewed' : 'unreviewed'}</small></div><div data-label="Factual difference"><code>{diffLabel(change)}</code></div><div data-label="Kind"><span class:ok={change.change_kind === 'added'} class:bad={change.change_kind === 'removed'} class:warn={change.change_kind === 'modified'} class="status">{kindLabel(change)}</span></div><div data-label="Review">{#if inventory.readOnly}<span class="mono">{change.seen ? 'REVIEWED' : 'READ ONLY'}</span>{:else}<button class="review-check" disabled={pending.has(change.id) || Boolean(change.seen) || reviewed.has(change.id)} aria-label={`Mark ${change.summary} reviewed`} aria-pressed={Boolean(change.seen) || reviewed.has(change.id)} onclick={() => reviewOne(change.id)}>{Boolean(change.seen) || reviewed.has(change.id) ? '✓' : ''}</button>{/if}</div></div>
       {/each}
     {:else}
       <div class="empty-register"><strong>NO FACTUAL CHANGES</strong><span>Before-and-after scan differences will appear here without alert scoring.</span></div>

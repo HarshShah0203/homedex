@@ -124,16 +124,16 @@
     <div class="empty-register compact"><strong>REMINDERS UNAVAILABLE</strong><span>{loadError}</span></div>
   {:else if rules.length}
     {#each rules as rule (rule.id)}
-      <div class="register-row">
+      <div class="register-row reminder-row">
         <div>
           <strong>{label(rule)}</strong>
           <small>{#if rule.channels.length}{#each rule.channels as kind}<code>{kind}</code> {/each}{:else}no channels{/if}</small>
         </div>
         {#if !readOnly}
           <div class="source-editor">
+            {#if notices[rule.id]}<span class={`status ${notices[rule.id].tone}`} role="status">{notices[rule.id].text}</span>{/if}
             <button class="quiet-button" disabled={Boolean(pending[rule.id])} onclick={() => testRule(rule.id)}>Test</button>
             <button class={confirmingID === rule.id ? 'danger-button' : 'quiet-button'} disabled={Boolean(pending[rule.id])} onclick={() => removeRule(rule)}>{confirmingID === rule.id ? 'Confirm delete' : 'Delete'}</button>
-            {#if notices[rule.id]}<span class={`status ${notices[rule.id].tone}`} role="status">{notices[rule.id].text}</span>{/if}
           </div>
         {/if}
       </div>

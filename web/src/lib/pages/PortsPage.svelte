@@ -43,14 +43,14 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="Ports · Allocation" title="Ports" meta={`${total} declarations`} />
+  <PageHead title="Ports" meta={`${total} declarations`} />
   {#if inventory.hosts.length}<section class="next-port" data-component-id="next-free-port"><span class="number">{loadingNextPort ? '…' : nextPort ?? '—'}</span><div><strong>Next unused TCP port</strong><small>{nextPortError || `checked for ${selectedHost?.name || 'selected host'} from 1024`}</small></div><button class="primary-button" disabled={nextPort === null} onclick={copyPort}>Copy {nextPort ?? 'port'}</button></section>{/if}
   <div class="toolbar"><input class="inline-search" bind:value={query} aria-label="Filter ports" placeholder="Find port, service, or host" />{#if inventory.hosts.length}<label class="field-label" for="port-host">Host</label><select id="port-host" bind:value={selectedHostID} aria-label="Select host for port lookup">{#each inventory.hosts as host}<option value={host.id}>{host.name}</option>{/each}</select>{/if}<span class="spacer"></span><span class="toolbar-meta">{rows.length} VISIBLE · {total} DECLARATIONS</span></div>
   <section class="register" data-component-id="port-allocation-register">
-    <header class="register-head port-cols"><span>Port</span><span>Protocol</span><span>Service</span><span>Host</span><span>Container fact</span><span>Scope</span></header>
+    <header class="register-head port-cols"><span class="num">Port</span><span>Proto</span><span>Service</span><span>Host</span><span>Binding</span><span>Scope</span></header>
     {#if rows.length}
       {#each rows as port}
-        <div class="register-row port-cols"><div class="port-number" data-label="Port">{port.number}</div><div class="mono" data-label="Protocol">{port.protocol}</div><div data-label="Service"><strong>{port.service ?? 'Unjoined service'}</strong></div><div data-label="Host"><strong>{port.host ?? 'Unknown host'}</strong><small>{port.host_ip || '0.0.0.0'}</small></div><div data-label="Container fact"><code>container {port.container_port}</code></div><div data-label="Scope"><span class:warn={Boolean(port.published)} class:ok={!Boolean(port.published)} class="status">{port.published ? 'Published' : 'Internal'}</span></div></div>
+        <div class="register-row port-cols"><div class="port-number num" data-label="Port">{port.number}</div><div class="mono" data-label="Proto">{port.protocol}</div><div data-label="Service"><strong>{port.service ?? 'Unjoined'}</strong></div><div data-label="Host" title={port.host_ip || '0.0.0.0'}>{port.host ?? 'Unknown'}{#if port.host_ip && port.host_ip !== '0.0.0.0'}<small>{port.host_ip}</small>{/if}</div><div data-label="Binding"><code>→ {port.container_port}</code></div><div data-label="Scope"><span class:warn={Boolean(port.published)} class:ok={!Boolean(port.published)} class="status">{port.published ? 'Published' : 'Internal'}</span></div></div>
       {/each}
     {:else}
       <div class="empty-register"><strong>{inventory.ports.length ? 'NO MATCHING PORTS' : 'NO PORTS INDEXED'}</strong><span>{inventory.ports.length ? `No declaration contains “${query}”.` : 'Port declarations appear after the first source scan.'}</span></div>

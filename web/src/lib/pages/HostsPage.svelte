@@ -21,7 +21,7 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="Index · Hosts" title="Hosts" meta={`${hosts.length} hosts · ${serviceTotal} services`}>
+  <PageHead title="Hosts" meta={`${hosts.length} hosts · ${serviceTotal} services`}>
     {#snippet actions()}{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/sources')}>Manage sources</button>{/if}{/snippet}
   </PageHead>
   {#if hosts.length}
