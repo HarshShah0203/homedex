@@ -55,6 +55,36 @@ describe('RemindersPanel', () => {
     expect(await screen.findByText('21d before')).toBeInTheDocument();
   });
 
+  it('adds a change-kind reminder with a null threshold', async () => {
+    const store: NotificationRule[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      const method = init?.method ?? 'GET';
+      if (path === '/api/notify/rules' && method === 'POST') {
+        const created = rule({ id: 8, name: 'Changes', kind: 'change', threshold_days: null, channels: ['ntfy'] });
+        store.push(created);
+        return json(created, 201);
+      }
+      return json({ items: store, total: store.length });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(RemindersPanel, { props: { readOnly: false } });
+
+    expect(await screen.findByText('NO REMINDERS')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Add reminder' }));
+    await fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'change' } });
+    expect(screen.queryByLabelText('Days before')).not.toBeInTheDocument();
+    await fireEvent.input(screen.getByLabelText('Shoutrrr URL'), { target: { value: 'ntfy://ntfy.sh/my-lab' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Add reminder' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/notify/rules', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ name: 'Changes', kind: 'change', threshold_days: null, channels: ['ntfy://ntfy.sh/my-lab'] })
+    })));
+    expect(await screen.findByText('on changes')).toBeInTheDocument();
+  });
+
   it('requires an inline confirm before deleting and calls the API', async () => {
     const store: NotificationRule[] = [rule()];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

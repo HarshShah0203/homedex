@@ -1,5 +1,5 @@
 import { createDemoInventory } from './demo';
-import type { Change, Connector, ConnectorInput, ConnectorMutation, ConnectorTest, ContextCounts, ContextExport, Expiry, Host, Inventory, InventoryIssue, InventoryIssueKind, InventoryResource, NotificationRule, NotificationRuleInput, NotificationTest, Port, Route, ScanRun, Service } from './types';
+import type { Change, Connector, ConnectorInput, ConnectorMutation, ConnectorTest, ContextCounts, ContextExport, Expiry, Host, Inventory, InventoryIssue, InventoryIssueKind, InventoryResource, NotificationRule, NotificationRuleInput, NotificationTest, Port, Route, ScanRun, Service, Share, PortConflict, ManualEntityInput } from './types';
 
 export type { Inventory } from './types';
 
@@ -157,6 +157,47 @@ export async function loadNextFreePort(hostID: number, start = 1024, end = 65535
   const params = new URLSearchParams({ host_id: String(hostID), start: String(start), end: String(end), protocol });
   const response = await requestJSON<{ port: number }>(`/api/ports/next-free?${params}`);
   return response.port;
+}
+
+export async function loadShares(): Promise<Share[]> {
+  const response = await requestJSON<ListResponse<Share>>('/api/share');
+  return response.items ?? [];
+}
+
+export async function createShare(input: { name: string; expires_in_hours?: number }): Promise<Share> {
+  return requestJSON('/api/share', { method: 'POST', body: input });
+}
+
+export async function revokeShare(id: number): Promise<void> {
+  await requestJSON(`/api/share/${id}`, { method: 'DELETE' });
+}
+
+export async function loadPortConflicts(): Promise<PortConflict[]> {
+  const response = await requestJSON<ListResponse<PortConflict>>('/api/ports/conflicts');
+  return response.items ?? [];
+}
+
+export async function createManualEntity(input: ManualEntityInput): Promise<unknown> {
+  return requestJSON('/api/entities', { method: 'POST', body: input });
+}
+
+export async function patchEntity(type: string, id: number, patch: Record<string, unknown>): Promise<unknown> {
+  return requestJSON(`/api/entities/${type}/${id}`, { method: 'PATCH', body: patch });
+}
+
+export async function downloadExport(format: 'markdown' | 'json' | 'csv', view?: string): Promise<void> {
+  const path = `/api/export/${format}${view ? `?view=${encodeURIComponent(view)}` : ''}`;
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`The export API returned ${response.status}.`);
+  const blob = await response.blob();
+  const fallback = `homedex-export.${format === 'markdown' ? 'md' : format}`;
+  const name = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] ?? fallback;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 type RequestOptions = { method?: string; body?: unknown; acceptedStatuses?: number[] };

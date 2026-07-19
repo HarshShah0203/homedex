@@ -27,7 +27,7 @@
 {#if pathname === '/' || pathname === '/index'}
   <IndexPage {inventory} />
 {:else if pathname.startsWith('/hosts')}
-  <HostsPage {path} {inventory} />
+  <HostsPage {path} {inventory} {onrefresh} />
 {:else if pathname.startsWith('/routes')}
   <RoutePage {path} {inventory} />
 {:else if pathname === '/ports'}
@@ -37,7 +37,7 @@
 {:else if pathname === '/changes'}
   <ChangesPage {inventory} />
 {:else if pathname === '/copy-my-lab' || pathname === '/settings/export'}
-  <CopyLabPage />
+  <CopyLabPage readOnly={inventory.readOnly} />
 {:else if pathname === '/sources' || pathname.startsWith('/settings/connectors')}
   <SourcesPage {inventory} {onrefresh} />
 {:else}

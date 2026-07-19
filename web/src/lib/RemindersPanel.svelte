@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createNotificationRule, deleteNotificationRule, loadNotificationRules, testNotificationRule } from './api';
-  import type { NotificationRule } from './types';
+  import type { NotificationRule, NotificationRuleInput } from './types';
 
   let { readOnly = false }: { readOnly?: boolean } = $props();
 
@@ -11,6 +11,7 @@
   let pending = $state<Record<number, string>>({});
   let notices = $state<Record<number, { tone: 'ok' | 'bad'; text: string }>>({});
   let showAdd = $state(false);
+  let kind = $state<'expiry' | 'change'>('expiry');
   let days = $state(14);
   let url = $state('');
   let addError = $state('');
@@ -49,6 +50,7 @@
   }
 
   function label(rule: NotificationRule) {
+    if (rule.kind === 'change') return 'on changes';
     return rule.threshold_days === null ? rule.kind : `${rule.threshold_days}d before`;
   }
 
@@ -87,20 +89,27 @@
   async function submitAdd(event: SubmitEvent) {
     event.preventDefault();
     addError = '';
-    const threshold = Math.trunc(Number(days));
-    if (!Number.isFinite(threshold) || threshold < 1) {
-      addError = 'Days must be 1 or more.';
-      return;
-    }
     if (!url.trim()) {
       addError = 'A Shoutrrr URL is required.';
       return;
     }
+    let input: NotificationRuleInput;
+    if (kind === 'change') {
+      input = { name: 'Changes', kind: 'change', threshold_days: null, channels: [url.trim()] };
+    } else {
+      const threshold = Math.trunc(Number(days));
+      if (!Number.isFinite(threshold) || threshold < 1) {
+        addError = 'Days must be 1 or more.';
+        return;
+      }
+      input = { name: `Expiry ${threshold}d`, kind: 'expiry', threshold_days: threshold, channels: [url.trim()] };
+    }
     adding = true;
     try {
-      await createNotificationRule({ name: `Expiry ${threshold}d`, kind: 'expiry', threshold_days: threshold, channels: [url.trim()] });
+      await createNotificationRule(input);
       url = '';
       days = 14;
+      kind = 'expiry';
       showAdd = false;
       await load();
     } catch (cause) {
@@ -144,7 +153,8 @@
   {#if !readOnly}
     {#if showAdd}
       <form class="source-editor" onsubmit={submitAdd}>
-        <label>Days before <input type="number" min="1" bind:value={days} /></label>
+        <label>Kind <select bind:value={kind}><option value="expiry">Expiry</option><option value="change">Changes</option></select></label>
+        {#if kind === 'expiry'}<label>Days before <input type="number" min="1" bind:value={days} /></label>{/if}
         <label>Shoutrrr URL <input type="text" placeholder="ntfy://ntfy.sh/my-lab" bind:value={url} /></label>
         <button class="primary-button" disabled={adding}>Add reminder</button>
         <button type="button" class="quiet-button" disabled={adding} onclick={() => { showAdd = false; addError = ''; }}>Cancel</button>

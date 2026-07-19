@@ -22,3 +22,38 @@ export type ScanRun = { id: number; started_at: string; finished_at: string | nu
 export type NotificationRule = { id: number; name: string; kind: 'expiry' | 'change'; threshold_days: number | null; filters: Record<string, unknown>; channels: string[]; channel_count: number; enabled: boolean; created_at: string; updated_at: string };
 export type NotificationRuleInput = { name: string; kind: string; threshold_days?: number | null; channels: string[]; enabled?: boolean };
 export type NotificationTest = { status: 'ok' | 'error'; error?: string };
+
+export type Share = {
+  id: number;
+  name: string;
+  created_at: string;
+  expires_at: string | null;
+  active: boolean;
+  token?: string;
+  share_url?: string;
+};
+
+export type PortConflict = {
+  host_id: number | null;
+  number: number;
+  protocol: string;
+  count: number;
+  service_ids: string[];
+};
+
+export type ManualEntityInput = {
+  entity_type: 'host' | 'service' | 'expiry';
+  name?: string;
+  kind?: string;
+  host_id?: number;
+  address?: string;
+  os?: string;
+  arch?: string;
+  stack?: string;
+  image?: string;
+  tag?: string;
+  state?: string;
+  subject?: string;
+  endpoint?: string;
+  expires_at?: string;
+};
