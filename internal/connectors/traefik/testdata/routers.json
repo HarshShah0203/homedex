@@ -1,1 +1,1 @@
-[{"name":"photos@docker","service":"immich@docker","rule":"Host(`photos.example.com`,`gallery.example.com`) && PathPrefix(`/api`)","tls":{"certResolver":"letsencrypt"}}]
+[{"name":"photos@docker","service":"immich","rule":"Host(`photos.example.com`,`gallery.example.com`) && PathPrefix(`/api`)","tls":{"certResolver":"letsencrypt"}},{"name":"files@file","service":"files@file","rule":"Host(`files.example.com`)"}]

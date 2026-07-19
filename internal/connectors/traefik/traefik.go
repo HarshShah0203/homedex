@@ -105,7 +105,7 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 		}
 		for _, h := range hosts {
 			for _, p := range paths {
-				for _, up := range ups[r.Service] {
+				for _, up := range upstreamsFor(r.Service, r.Name, ups) {
 					u, err := url.Parse(up)
 					if err != nil {
 						continue
@@ -117,6 +117,36 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 		}
 	}
 	return snap, nil
+}
+
+// upstreamsFor resolves a router's service reference against the service map.
+// Traefik's API names services with a provider suffix ("whoami@docker") while
+// routers reference them unsuffixed ("whoami"), so an exact match is tried
+// first, then the reference qualified with the router's own provider, then a
+// unique suffix-insensitive match.
+func upstreamsFor(ref, routerName string, ups map[string][]string) []string {
+	if v, ok := ups[ref]; ok {
+		return v
+	}
+	if !strings.Contains(ref, "@") {
+		if i := strings.Index(routerName, "@"); i >= 0 {
+			if v, ok := ups[ref+routerName[i:]]; ok {
+				return v
+			}
+		}
+		var match []string
+		count := 0
+		for name, v := range ups {
+			if strings.HasPrefix(name, ref+"@") {
+				match = v
+				count++
+			}
+		}
+		if count == 1 {
+			return match
+		}
+	}
+	return nil
 }
 
 var argRE = regexp.MustCompile("`([^`]+)`|'([^']+)'|\"([^\"]+)\"")

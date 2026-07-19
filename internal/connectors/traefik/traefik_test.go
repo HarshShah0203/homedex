@@ -29,12 +29,28 @@ func TestScanRecordedMultiHostRouter(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(snap.Routes) != 2 {
+	if len(snap.Routes) != 3 {
 		t.Fatalf("routes=%d", len(snap.Routes))
 	}
+	immich := 0
 	for _, r := range snap.Routes {
-		if r.PathPrefix != "/api" || r.UpstreamHost != "immich-server" || r.UpstreamPort != 2283 || !r.TLS {
-			t.Fatalf("unexpected route: %#v", r)
+		switch r.Domain {
+		case "photos.example.com", "gallery.example.com":
+			// The router references service "immich" while the API names it
+			// "immich@docker"; resolution must bridge the provider suffix.
+			immich++
+			if r.PathPrefix != "/api" || r.UpstreamHost != "immich-server" || r.UpstreamPort != 2283 || !r.TLS {
+				t.Fatalf("unexpected immich route: %#v", r)
+			}
+		case "files.example.com":
+			if r.PathPrefix != "/" || r.UpstreamHost != "10.0.0.5" || r.UpstreamPort != 8443 || r.TLS {
+				t.Fatalf("unexpected files route: %#v", r)
+			}
+		default:
+			t.Fatalf("unexpected domain: %#v", r)
 		}
+	}
+	if immich != 2 {
+		t.Fatalf("immich routes=%d", immich)
 	}
 }
