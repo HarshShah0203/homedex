@@ -14,7 +14,20 @@
   let kind = $state<'expiry' | 'change'>('expiry');
   let days = $state(14);
   let url = $state('');
+  let changeKinds = $state('');
   let addError = $state('');
+
+  // Change rules can be scoped to specific change_kinds; the server matches these
+  // values exactly, so parse a comma list down to the known kinds and drop the rest.
+  const CHANGE_KINDS = ['added', 'removed', 'modified'];
+  function parseChangeKinds(value: string): string[] {
+    const chosen: string[] = [];
+    for (const part of value.split(',')) {
+      const kind = part.trim().toLowerCase();
+      if (CHANGE_KINDS.includes(kind) && !chosen.includes(kind)) chosen.push(kind);
+    }
+    return chosen;
+  }
   let adding = $state(false);
   let confirmingID = $state<number | null>(null);
   let confirmTimer = 0;
@@ -96,6 +109,8 @@
     let input: NotificationRuleInput;
     if (kind === 'change') {
       input = { name: 'Changes', kind: 'change', threshold_days: null, channels: [url.trim()] };
+      const kinds = parseChangeKinds(changeKinds);
+      if (kinds.length) input.filters = { change_kinds: kinds };
     } else {
       const threshold = Math.trunc(Number(days));
       if (!Number.isFinite(threshold) || threshold < 1) {
@@ -109,6 +124,7 @@
       await createNotificationRule(input);
       url = '';
       days = 14;
+      changeKinds = '';
       kind = 'expiry';
       showAdd = false;
       await load();
@@ -155,6 +171,7 @@
       <form class="source-editor" onsubmit={submitAdd}>
         <label>Kind <select bind:value={kind}><option value="expiry">Expiry</option><option value="change">Changes</option></select></label>
         {#if kind === 'expiry'}<label>Days before <input type="number" min="1" bind:value={days} /></label>{/if}
+        {#if kind === 'change'}<label>Change kinds <input type="text" placeholder="added, removed, modified" bind:value={changeKinds} /></label>{/if}
         <label>Shoutrrr URL <input type="text" placeholder="ntfy://ntfy.sh/my-lab" bind:value={url} /></label>
         <button class="primary-button" disabled={adding}>Add reminder</button>
         <button type="button" class="quiet-button" disabled={adding} onclick={() => { showAdd = false; addError = ''; }}>Cancel</button>

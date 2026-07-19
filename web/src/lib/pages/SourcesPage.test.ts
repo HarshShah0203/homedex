@@ -7,6 +7,7 @@ afterEach(() => {
   cleanup();
   sessionStorage.clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('SourcesPage connector lifecycle', () => {
@@ -24,6 +25,10 @@ describe('SourcesPage connector lifecycle', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
+    // Drive Date.now so the delete two-step confirm can advance past its 350ms guard.
+    let now = 1_700_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+
     render(SourcesPage, { props: { inventory, onrefresh } });
 
     await fireEvent.click(screen.getByRole('button', { name: 'Test' }));
@@ -39,6 +44,7 @@ describe('SourcesPage connector lifecycle', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     expect(fetchMock).not.toHaveBeenCalledWith('/api/connectors/1', expect.objectContaining({ method: 'DELETE' }));
+    now += 400; // advance past the 350ms double-click guard so the confirm is honored
     await fireEvent.click(await screen.findByRole('button', { name: 'Confirm delete' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/connectors/1', expect.objectContaining({ method: 'DELETE' })));
     await waitFor(() => expect(onrefresh).toHaveBeenCalledTimes(4));

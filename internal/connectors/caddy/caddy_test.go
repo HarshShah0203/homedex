@@ -25,4 +25,10 @@ func TestScanRecursesIntoSubroutes(t *testing.T) {
 	if r.Domain != "media.example.com" || r.PathPrefix != "/jellyfin/" || r.UpstreamHost != "jellyfin" || r.UpstreamPort != 8096 {
 		t.Fatalf("unexpected route: %#v", r)
 	}
+	// The natural key must be stable: it keys on host+path only and must not
+	// embed the dial (here jellyfin:8096) so a raw-IP dial cannot make the key
+	// churn on container recreates.
+	if r.Key != "caddy:media.example.com:/jellyfin/" {
+		t.Fatalf("unexpected key %q", r.Key)
+	}
 }

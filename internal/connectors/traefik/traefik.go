@@ -2,11 +2,11 @@ package traefik
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/HarshShah0203/homedex/internal/connectors"
@@ -15,7 +15,7 @@ import (
 
 type Connector struct{ Client *http.Client }
 
-func New() *Connector           { return &Connector{Client: http.DefaultClient} }
+func New() *Connector           { return &Connector{Client: connectors.Client(connectors.DefaultTimeout)} }
 func (*Connector) Kind() string { return "traefik" }
 
 type config struct {
@@ -37,22 +37,14 @@ func cfg(raw connectors.Config) (config, error) {
 	return c, nil
 }
 func (c *Connector) get(ctx context.Context, x config, path string, out any) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(x.URL, "/")+path, nil)
+	opts := []connectors.Option{connectors.WithLabel("Traefik")}
 	if x.Username != "" {
-		req.SetBasicAuth(x.Username, x.Password)
+		opts = append(opts, connectors.WithBasicAuth(x.Username, x.Password))
 	}
 	if x.Header != "" {
-		req.Header.Set(x.Header, x.HeaderValue)
+		opts = append(opts, connectors.WithHeader(x.Header, x.HeaderValue))
 	}
-	res, err := c.Client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return fmt.Errorf("Traefik API returned %s", res.Status)
-	}
-	return json.NewDecoder(res.Body).Decode(out)
+	return connectors.GetJSON(ctx, c.Client, strings.TrimRight(x.URL, "/")+path, out, opts...)
 }
 func (c *Connector) Validate(ctx context.Context, raw connectors.Config) error {
 	x, e := cfg(raw)
@@ -105,13 +97,24 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 		}
 		for _, h := range hosts {
 			for _, p := range paths {
-				for _, up := range upstreamsFor(r.Service, r.Name, ups) {
+				upstreams := upstreamsFor(r.Service, r.Name, ups)
+				for i, up := range upstreams {
 					u, err := url.Parse(up)
 					if err != nil {
 						continue
 					}
 					port := portOf(u)
-					snap.Routes = append(snap.Routes, domain.Route{Key: "traefik:" + r.Name + ":" + h + ":" + p + ":" + up, Domain: h, PathPrefix: p, UpstreamHost: u.Hostname(), UpstreamPort: port, TLS: r.TLS != nil, Status: "unknown"})
+					// The natural key must be stable across container
+					// recreates: for the Docker provider the upstream URL is
+					// the container's internal IP:port, which changes on every
+					// "docker compose up". Key on router+host+path only, and
+					// disambiguate genuine multi-upstream routers by the
+					// server's index (0,1,2…) rather than its volatile URL.
+					key := "traefik:" + r.Name + ":" + h + ":" + p
+					if len(upstreams) > 1 {
+						key += ":" + strconv.Itoa(i)
+					}
+					snap.Routes = append(snap.Routes, domain.Route{Key: key, Domain: h, PathPrefix: p, UpstreamHost: u.Hostname(), UpstreamPort: port, TLS: r.TLS != nil, Status: "unknown"})
 				}
 			}
 		}

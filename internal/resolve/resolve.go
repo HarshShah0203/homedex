@@ -60,13 +60,16 @@ func resolve(route *domain.Route, inv Inventory) {
 	var ipCandidates []candidate
 	for _, svc := range inv.Services {
 		for _, n := range svc.Networks {
-			if n.IP != "" && host == normalize(n.IP) && listens(svc.Ref, route.UpstreamPort, inv.Ports) {
-				ipCandidates = append(ipCandidates, candidate{service: svc, network: n.Name})
+			if n.IP == "" || host != normalize(n.IP) {
+				continue
+			}
+			if serves, verified := listens(svc.Ref, route.UpstreamPort, inv.Ports); serves {
+				ipCandidates = append(ipCandidates, candidate{service: svc, network: n.Name, portVerified: verified})
 			}
 		}
 	}
 	if resolved, ok := uniqueCandidate(scopeCandidates(ipCandidates, proxyHost, route.ProxyNetworks)); ok {
-		matched(route, resolved.service.Ref, "high")
+		matched(route, resolved.service.Ref, confidenceForPort(resolved.portVerified))
 		return
 	}
 	if len(ipCandidates) > 0 {
@@ -76,14 +79,19 @@ func resolve(route *domain.Route, inv Inventory) {
 	// Docker name, Compose service, or a network alias.
 	var named []candidate
 	for _, svc := range inv.Services {
-		if nameMatch(host, svc) && listens(svc.Ref, route.UpstreamPort, inv.Ports) {
-			for _, network := range matchingNetworks(host, svc) {
-				named = append(named, candidate{service: svc, network: network})
-			}
+		if !nameMatch(host, svc) {
+			continue
+		}
+		serves, verified := listens(svc.Ref, route.UpstreamPort, inv.Ports)
+		if !serves {
+			continue
+		}
+		for _, network := range matchingNetworks(host, svc) {
+			named = append(named, candidate{service: svc, network: network, portVerified: verified})
 		}
 	}
 	if resolved, ok := uniqueCandidate(scopeCandidates(named, proxyHost, route.ProxyNetworks)); ok {
-		matched(route, resolved.service.Ref, "high")
+		matched(route, resolved.service.Ref, confidenceForPort(resolved.portVerified))
 		return
 	}
 	if len(named) > 0 {
@@ -115,8 +123,9 @@ func resolve(route *domain.Route, inv Inventory) {
 }
 
 type candidate struct {
-	service Service
-	network string
+	service      Service
+	network      string
+	portVerified bool
 }
 
 func scopeCandidates(candidates []candidate, proxyHost EntityRef, proxyNetworks []string) []candidate {
@@ -169,6 +178,17 @@ func matched(r *domain.Route, ref EntityRef, confidence string) {
 	r.ResolveConfidence = confidence
 	r.Status = "ok"
 }
+
+// confidenceForPort keeps a verified port match at high confidence while
+// downgrading name/IP matches whose port could not be verified (the service
+// exposes no known ports) to medium, so an unprovable port never fabricates a
+// high-confidence link.
+func confidenceForPort(verified bool) string {
+	if verified {
+		return "high"
+	}
+	return "medium"
+}
 func normalize(s string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), "."))
 }
@@ -204,7 +224,14 @@ func matchingNetworks(host string, s Service) []string {
 	}
 	return networks
 }
-func listens(ref EntityRef, port int, ports []Port) bool {
+// listens reports whether the service can serve the requested port (serves) and
+// whether that was verified against a known port row (verified). A service with
+// no known ports at all is treated as possibly serving (serves=true) but
+// unverified (verified=false): the route may still resolve on name/IP evidence,
+// yet callers must not upgrade it to high confidence on an unprovable port. A
+// service that has known ports none of which match does not serve the port
+// (serves=false), so it is not a candidate.
+func listens(ref EntityRef, port int, ports []Port) (serves, verified bool) {
 	known := false
 	for _, p := range ports {
 		if p.ServiceRef != ref {
@@ -212,10 +239,13 @@ func listens(ref EntityRef, port int, ports []Port) bool {
 		}
 		known = true
 		if p.ContainerPort == port || (!p.Published && p.Number == port) {
-			return true
+			return true, true
 		}
 	}
-	return !known
+	if !known {
+		return true, false
+	}
+	return false, false
 }
 func validRef(ref EntityRef) bool { return ref.ConnectorID != 0 || ref.Key != "" }
 func dedupeRefs(in []EntityRef) []EntityRef {

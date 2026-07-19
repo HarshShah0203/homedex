@@ -51,7 +51,9 @@ func TestRoutesAllConfidencePaths(t *testing.T) {
 		status     string
 	}{
 		{"ip", 1, "high", "ok"}, {"alias", 1, "high", "ok"}, {"alias", 1, "high", "ok"},
-		{"unknown-port", 1, "high", "ok"}, {"published", 1, "medium", "ok"},
+		// changedetection exposes no ports, so its port cannot be verified: the
+		// alias match still resolves but must not claim high confidence.
+		{"unknown-port", 1, "medium", "ok"}, {"published", 1, "medium", "ok"},
 		{"published", 1, "medium", "ok"}, {"", 0, "none", "broken"},
 	}
 	for i, w := range want {
@@ -117,6 +119,31 @@ func TestRouteFollowsRecreatedContainerNaturalKey(t *testing.T) {
 	}
 	if got := Routes([]domain.Route{r}, newInv)[0].ResolvedServiceKey; got != "container:new" {
 		t.Fatal(got)
+	}
+}
+
+func TestZeroPortServiceNotHighOnPortAlone(t *testing.T) {
+	host := ref(1, "host")
+	// grafana matches by name but exposes no port rows, so the requested port is
+	// unverifiable. The match may stand on the name, but must not be high.
+	inv := Inventory{Services: []Service{service(1, "app", host, "grafana")}}
+	got := Routes([]domain.Route{{UpstreamHost: "grafana", UpstreamPort: 3000}}, inv)[0]
+	if got.ResolvedServiceKey != "app" || got.Status != "ok" {
+		t.Fatalf("zero-port name match should still resolve: %#v", got)
+	}
+	if got.ResolveConfidence != "medium" {
+		t.Fatalf("zero-port match confidence = %q, want medium (not high)", got.ResolveConfidence)
+	}
+
+	// A sibling service with a matching port row must still resolve at high
+	// confidence, proving the fix does not drop legitimate verified matches.
+	withPort := Inventory{
+		Services: []Service{service(1, "app", host, "grafana")},
+		Ports:    []Port{port(ref(1, "app"), host, 3000, 3000, false)},
+	}
+	verified := Routes([]domain.Route{{UpstreamHost: "grafana", UpstreamPort: 3000}}, withPort)[0]
+	if verified.ResolveConfidence != "high" || verified.Status != "ok" {
+		t.Fatalf("verified port match = %#v, want high/ok", verified)
 	}
 }
 

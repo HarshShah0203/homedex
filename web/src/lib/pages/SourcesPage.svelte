@@ -13,6 +13,7 @@
   let editSchedule = $state(15);
   let confirmingID = $state<number | null>(null);
   let confirmTimer = 0;
+  let armedAt = 0;
 
   const addKinds = [
     { kind: 'docker', label: 'Docker', name: 'Docker', schedule: 15 },
@@ -159,6 +160,7 @@
 
   function armDelete(id: number) {
     confirmingID = id;
+    armedAt = Date.now();
     window.clearTimeout(confirmTimer);
     confirmTimer = window.setTimeout(() => (confirmingID = null), 4000);
   }
@@ -241,6 +243,9 @@
       setNotice(connector.id, 'bad', 'Inventory history remains, but this source stops scanning. Confirm to delete.');
       return;
     }
+    // Ignore a confirm that lands within 350ms of arming: both clicks hit the
+    // same button in the same spot, so an accidental double-click would delete.
+    if (Date.now() - armedAt < 350) return;
     window.clearTimeout(confirmTimer);
     confirmingID = null;
     await run(connector.id, 'Deleting', async () => {

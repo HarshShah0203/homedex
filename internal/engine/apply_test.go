@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -411,5 +412,220 @@ func TestApplyEvaluatesNotificationRulesAfterCommit(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("notification rules were not evaluated")
+	}
+}
+
+// BUG 1: reconciling ports by natural key must keep unchanged ports' ids stable,
+// so user metadata (entity_notes/entity_tags/custom_fields keyed by the port id)
+// is not orphaned when the port set changes.
+func TestApplyPortsPreserveIDAndMetadataAcrossChange(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, err := st.CreateConnector(ctx, "docker", "Docker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(st, nil)
+	base := domain.Snapshot{
+		Hosts:    []domain.Host{{Key: "host", Name: "nas", Kind: "docker"}},
+		Services: []domain.Service{{Key: "svc", HostKey: "host", Name: "app", State: "running"}},
+		Ports:    []domain.Port{{ServiceKey: "svc", HostKey: "host", Number: 8080, ContainerPort: 80, Protocol: "tcp", Published: true}},
+	}
+	if _, _, err = a.Apply(ctx, id, base); err != nil {
+		t.Fatal(err)
+	}
+	var portID int64
+	if err = st.DB().QueryRow(`SELECT id FROM ports WHERE connector_id=? AND number=8080`, id).Scan(&portID); err != nil {
+		t.Fatal(err)
+	}
+	// User pins metadata to this port; it must survive a later scan.
+	if _, err = st.DB().Exec(`INSERT INTO entity_notes(entity_type,entity_id,notes,updated_at) VALUES('port',?,'exposed intentionally','now')`, portID); err != nil {
+		t.Fatal(err)
+	}
+
+	grow := base
+	grow.Ports = append(append([]domain.Port(nil), base.Ports...), domain.Port{ServiceKey: "svc", HostKey: "host", Number: 9090, ContainerPort: 90, Protocol: "tcp", Published: true})
+	if _, _, err = a.Apply(ctx, id, grow); err != nil {
+		t.Fatal(err)
+	}
+	var stillID int64
+	if err = st.DB().QueryRow(`SELECT id FROM ports WHERE connector_id=? AND number=8080`, id).Scan(&stillID); err != nil {
+		t.Fatal(err)
+	}
+	if stillID != portID {
+		t.Fatalf("unchanged port id changed %d -> %d, orphaning metadata", portID, stillID)
+	}
+	var notes string
+	if err = st.DB().QueryRow(`SELECT notes FROM entity_notes WHERE entity_type='port' AND entity_id=?`, portID).Scan(&notes); err != nil {
+		t.Fatalf("port metadata lost after reconcile: %v", err)
+	}
+	if notes != "exposed intentionally" {
+		t.Fatalf("port notes=%q, want preserved", notes)
+	}
+	var count int
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM ports WHERE connector_id=?`, id).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("port count=%d, want 2", count)
+	}
+}
+
+// BUG 2: port change events must use entity_type 'port' and the real port id (not
+// 'ports'/connector id) so EntityManager.Detail history surfaces them.
+func TestApplyEmitsPerPortChangeEventsWithRealIDs(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, err := st.CreateConnector(ctx, "docker", "Docker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(st, nil)
+	snap := domain.Snapshot{
+		Hosts:    []domain.Host{{Key: "host", Name: "nas", Kind: "docker"}},
+		Services: []domain.Service{{Key: "svc", HostKey: "host", Name: "app", State: "running"}},
+		Ports:    []domain.Port{{ServiceKey: "svc", HostKey: "host", Number: 8080, ContainerPort: 80, Protocol: "tcp", Published: true}},
+	}
+	if _, _, err = a.Apply(ctx, id, snap); err != nil {
+		t.Fatal(err)
+	}
+	var portID int64
+	if err = st.DB().QueryRow(`SELECT id FROM ports WHERE connector_id=?`, id).Scan(&portID); err != nil {
+		t.Fatal(err)
+	}
+	var kind string
+	if err = st.DB().QueryRow(`SELECT change_kind FROM changes WHERE entity_type='port' AND entity_id=? AND change_kind='added'`, portID).Scan(&kind); err != nil {
+		t.Fatalf("no per-port 'added' change for id %d: %v", portID, err)
+	}
+	// The old bug filed the change under the plural entity_type 'ports' keyed to
+	// the connector id; that misrouted row must no longer exist.
+	var misfiled int
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM changes WHERE entity_type='ports'`).Scan(&misfiled); err != nil {
+		t.Fatal(err)
+	}
+	if misfiled != 0 {
+		t.Fatalf("found %d misfiled plural 'ports' change rows", misfiled)
+	}
+
+	if _, _, err = a.Apply(ctx, id, domain.Snapshot{Hosts: snap.Hosts, Services: snap.Services}); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT change_kind FROM changes WHERE entity_type='port' AND entity_id=? AND change_kind='removed'`, portID).Scan(&kind); err != nil {
+		t.Fatalf("no per-port 'removed' change for id %d: %v", portID, err)
+	}
+}
+
+// BUG 3: an unchanged network set must not trigger a delete+reinsert every scan.
+func TestApplyNetworksSkipUnchangedRewrite(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, err := st.CreateConnector(ctx, "docker", "Docker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(st, nil)
+	snap := domain.Snapshot{
+		Hosts:    []domain.Host{{Key: "host", Name: "nas", Kind: "docker"}},
+		Services: []domain.Service{{Key: "svc", HostKey: "host", Name: "app", State: "running", Networks: []domain.ServiceNetwork{{Name: "apps", IP: "172.20.0.8", Aliases: []string{"web"}}}}},
+	}
+	if _, _, err = a.Apply(ctx, id, snap); err != nil {
+		t.Fatal(err)
+	}
+	// Count row deletions on service_networks to catch needless rewrites.
+	if _, err = st.DB().Exec(`CREATE TABLE net_deletes(n INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.DB().Exec(`INSERT INTO net_deletes VALUES(0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = st.DB().Exec(`CREATE TRIGGER net_del AFTER DELETE ON service_networks BEGIN UPDATE net_deletes SET n=n+1; END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = a.Apply(ctx, id, snap); err != nil {
+		t.Fatal(err)
+	}
+	var deletes int
+	if err = st.DB().QueryRow(`SELECT n FROM net_deletes`).Scan(&deletes); err != nil {
+		t.Fatal(err)
+	}
+	if deletes != 0 {
+		t.Fatalf("unchanged network set was rewritten (%d deletes)", deletes)
+	}
+	// A genuine change still rewrites and persists.
+	snap.Services[0].Networks[0].IP = "172.20.0.9"
+	if _, _, err = a.Apply(ctx, id, snap); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT n FROM net_deletes`).Scan(&deletes); err != nil {
+		t.Fatal(err)
+	}
+	if deletes != 1 {
+		t.Fatalf("changed network set delete count=%d, want 1", deletes)
+	}
+	var ip string
+	if err = st.DB().QueryRow(`SELECT ip_address FROM service_networks`).Scan(&ip); err != nil {
+		t.Fatal(err)
+	}
+	if ip != "172.20.0.9" {
+		t.Fatalf("changed network not persisted: ip=%q", ip)
+	}
+}
+
+// BUG 4: routes.cert_id must be populated by matching the route domain against a
+// cert subject/SAN, and only when the match is unique.
+func TestApplyLinksRouteToMatchingCert(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	id, err := st.CreateConnector(ctx, "npm", "NPM", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(st, nil)
+	expires := time.Date(2027, 1, 2, 3, 4, 5, 0, time.UTC)
+	snap := domain.Snapshot{
+		Routes: []domain.Route{{Key: "route:app", Domain: "App.Example", UpstreamHost: "app", UpstreamPort: 8080, TLS: true, Status: "ok"}},
+		Certs:  []domain.Cert{{Key: "cert:app", Subject: "cn.example", SANs: []string{"app.example"}, NotAfter: expires, Endpoint: "app.example:443"}},
+	}
+	if _, _, err = a.Apply(ctx, id, snap); err != nil {
+		t.Fatal(err)
+	}
+	var certID int64
+	if err = st.DB().QueryRow(`SELECT id FROM certs WHERE natural_key='cert:app'`).Scan(&certID); err != nil {
+		t.Fatal(err)
+	}
+	var linked sql.NullInt64
+	if err = st.DB().QueryRow(`SELECT cert_id FROM routes WHERE natural_key='route:app'`).Scan(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if !linked.Valid || linked.Int64 != certID {
+		t.Fatalf("route cert_id=%v, want %d (matched via SAN, case-insensitive)", linked, certID)
+	}
+
+	// Ambiguity guard: a second active cert also covering the domain unlinks it.
+	snap.Certs = append(snap.Certs, domain.Cert{Key: "cert:dup", Subject: "app.example", NotAfter: expires, Endpoint: "app.example:8443"})
+	if _, _, err = a.Apply(ctx, id, snap); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT cert_id FROM routes WHERE natural_key='route:app'`).Scan(&linked); err != nil {
+		t.Fatal(err)
+	}
+	if linked.Valid {
+		t.Fatalf("ambiguous cert match must leave cert_id NULL, got %v", linked)
 	}
 }

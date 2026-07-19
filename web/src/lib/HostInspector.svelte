@@ -14,8 +14,14 @@
   let notesDraft = $state('');
   let notesStatus = $state<'idle' | 'saving' | 'saved' | 'error'>('idle');
   let notesError = $state('');
+  // App.refresh() swaps the whole inventory after any mutation, replacing `host`
+  // with a fresh object even for a background refresh of the same record. Reset
+  // the draft only when the host IDENTITY changes so a refresh preserves edits.
+  let loadedHostID: number | null = null;
 
   $effect(() => {
+    if (host.id === loadedHostID) return;
+    loadedHostID = host.id;
     notesDraft = (host as { notes?: string }).notes ?? '';
     notesStatus = 'idle';
     notesError = '';

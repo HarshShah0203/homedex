@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,7 +32,7 @@ type cachedDomain struct {
 }
 
 func New() *Connector {
-	return &Connector{Client: http.DefaultClient, BootstrapURL: "https://data.iana.org/rdap/dns.json", domainCache: map[string]cachedDomain{}}
+	return &Connector{Client: connectors.Client(connectors.DefaultTimeout), BootstrapURL: "https://data.iana.org/rdap/dns.json", domainCache: map[string]cachedDomain{}}
 }
 func (*Connector) Kind() string { return "rdap" }
 
@@ -84,15 +85,6 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 		if e = throttle(ctx); e != nil {
 			return s, e
 		}
-		req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(base, "/")+"/domain/"+url.PathEscape(d), nil)
-		res, e := c.Client.Do(req)
-		if e != nil {
-			if ctx.Err() != nil {
-				return s, ctx.Err()
-			}
-			s.Domains = append(s.Domains, unknown(d))
-			continue
-		}
 		var v struct {
 			Events []struct {
 				Action string    `json:"eventAction"`
@@ -106,9 +98,16 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 				VCard []any    `json:"vcardArray"`
 			} `json:"entities"`
 		}
-		e = json.NewDecoder(res.Body).Decode(&v)
-		res.Body.Close()
-		if e != nil || res.StatusCode/100 != 2 {
+		// RDAP servers are discovered from IANA bootstrap data, not chosen by
+		// the administrator, so the shared size-capped GetJSON guards against a
+		// hostile server streaming unbounded JSON. Any failure (network,
+		// non-2xx, or decode) degrades to an "unknown" record exactly as
+		// before; a cancelled context still aborts the whole scan.
+		reqURL := strings.TrimRight(base, "/") + "/domain/" + url.PathEscape(d)
+		if err := connectors.GetJSON(ctx, c.Client, reqURL, &v); err != nil {
+			if ctx.Err() != nil {
+				return s, ctx.Err()
+			}
 			s.Domains = append(s.Domains, unknown(d))
 			continue
 		}
@@ -193,7 +192,8 @@ func (c *Connector) bootstrap(ctx context.Context) (map[string]string, error) {
 	var b struct {
 		Services [][][]string `json:"services"`
 	}
-	if e = json.NewDecoder(res.Body).Decode(&b); e != nil {
+	// Size-cap the bootstrap read as well; behavior is otherwise unchanged.
+	if e = json.NewDecoder(io.LimitReader(res.Body, connectors.MaxResponseBytes)).Decode(&b); e != nil {
 		return nil, e
 	}
 	out := map[string]string{}

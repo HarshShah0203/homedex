@@ -2,10 +2,10 @@ package caddy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/HarshShah0203/homedex/internal/connectors"
@@ -14,7 +14,7 @@ import (
 
 type Connector struct{ Client *http.Client }
 
-func New() *Connector           { return &Connector{http.DefaultClient} }
+func New() *Connector           { return &Connector{connectors.Client(connectors.DefaultTimeout)} }
 func (*Connector) Kind() string { return "caddy" }
 func endpoint(raw connectors.Config) (string, error) {
 	x, e := connectors.DecodeConfig[struct {
@@ -33,17 +33,8 @@ func (c *Connector) load(ctx context.Context, raw connectors.Config) (any, error
 	if e != nil {
 		return nil, e
 	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
-	res, e := c.Client.Do(req)
-	if e != nil {
-		return nil, e
-	}
-	defer res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("Caddy API returned %s", res.Status)
-	}
 	var v any
-	e = json.NewDecoder(res.Body).Decode(&v)
+	e = connectors.GetJSON(ctx, c.Client, u, &v, connectors.WithLabel("Caddy"))
 	return v, e
 }
 func (c *Connector) Validate(ctx context.Context, raw connectors.Config) error {
@@ -83,12 +74,21 @@ func walk(v any, hosts []string, path string, out *[]domain.Route) {
 		}
 		if x["handler"] == "reverse_proxy" {
 			if us, ok := x["upstreams"].([]any); ok {
-				for _, u := range us {
+				for i, u := range us {
 					m, _ := u.(map[string]any)
 					dial := fmt.Sprint(m["dial"])
 					host, port := splitDial(dial)
 					for _, h := range hosts {
-						*out = append(*out, domain.Route{Key: "caddy:" + h + ":" + path + ":" + dial, Domain: h, PathPrefix: path, UpstreamHost: host, UpstreamPort: port, Status: "unknown", TLS: true})
+						// Keep the key stable: a Caddy "dial" is usually a
+						// container name (stable) but may be a raw IP:port
+						// (volatile). Mirror the Traefik fix — key on
+						// host+path and disambiguate genuine multi-upstream
+						// routes by server index rather than the dial value.
+						key := "caddy:" + h + ":" + path
+						if len(us) > 1 {
+							key += ":" + strconv.Itoa(i)
+						}
+						*out = append(*out, domain.Route{Key: key, Domain: h, PathPrefix: path, UpstreamHost: host, UpstreamPort: port, Status: "unknown", TLS: true})
 					}
 				}
 			}

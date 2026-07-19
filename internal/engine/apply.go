@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -125,6 +124,11 @@ func (a *Applier) Apply(ctx context.Context, connectorID int64, snapshot domain.
 		return 0, 0, err
 	}
 	changeCount += n
+	// Routes and certs are both persisted now; link each route to its covering
+	// certificate so the per-route expiry column is populated.
+	if err = linkRouteCerts(ctx, tx); err != nil {
+		return 0, 0, err
+	}
 	n, err = applyDomains(ctx, tx, connectorID, runID, now, snapshot.Domains)
 	if err != nil {
 		return 0, 0, err
@@ -156,23 +160,82 @@ func (a *Applier) Apply(ctx context.Context, connectorID int64, snapshot domain.
 	return runID, changeCount, nil
 }
 
+type networkRow struct{ name, ip, aliases string }
+
 func applyNetworks(ctx context.Context, tx *sql.Tx, items []domain.Service, services map[string]int64) error {
 	for _, svc := range items {
 		id, ok := services[svc.NaturalKey()]
 		if !ok {
 			continue
 		}
+		incoming := make([]networkRow, 0, len(svc.Networks))
+		for _, network := range svc.Networks {
+			aliases, _ := json.Marshal(network.Aliases)
+			incoming = append(incoming, networkRow{name: network.Name, ip: network.IP, aliases: string(aliases)})
+		}
+		// Skip the delete+insert entirely when the stored set already matches, so a
+		// scan that observes no network change performs no writes under the
+		// exclusive writer lock instead of churning every row every time.
+		stored, err := loadServiceNetworks(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if sameNetworks(stored, incoming) {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM service_networks WHERE service_id=?`, id); err != nil {
 			return err
 		}
-		for _, network := range svc.Networks {
-			aliases, _ := json.Marshal(network.Aliases)
-			if _, err := tx.ExecContext(ctx, `INSERT INTO service_networks(service_id,network_name,ip_address,aliases) VALUES(?,?,?,?)`, id, network.Name, network.IP, string(aliases)); err != nil {
+		for _, n := range incoming {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO service_networks(service_id,network_name,ip_address,aliases) VALUES(?,?,?,?)`, id, n.name, n.ip, n.aliases); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func loadServiceNetworks(ctx context.Context, tx *sql.Tx, serviceID int64) ([]networkRow, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT network_name,ip_address,aliases FROM service_networks WHERE service_id=?`, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []networkRow
+	for rows.Next() {
+		var n networkRow
+		if err := rows.Scan(&n.name, &n.ip, &n.aliases); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+func sameNetworks(a, b []networkRow) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sortNetworks(a)
+	sortNetworks(b)
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sortNetworks(n []networkRow) {
+	sort.Slice(n, func(i, j int) bool {
+		if n[i].name != n[j].name {
+			return n[i].name < n[j].name
+		}
+		if n[i].ip != n[j].ip {
+			return n[i].ip < n[j].ip
+		}
+		return n[i].aliases < n[j].aliases
+	})
 }
 
 func applyHosts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now string, items []domain.Host) (map[string]int64, int, error) {
@@ -303,50 +366,112 @@ func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, no
 	return ids, changes + n, err
 }
 
+// portRow is an existing persisted port, loaded so applyPorts can reconcile by
+// natural key in place. Keeping the row (and its id) stable preserves user
+// metadata (entity_notes/entity_tags/custom_fields keyed by entity_id) that a
+// delete+reinsert would orphan.
+type portRow struct {
+	id            int64
+	serviceID     int64
+	hostID        sql.NullInt64
+	number        int
+	protocol      string
+	published     bool
+	hostIP        string
+	containerPort int
+	source        string
+}
+
 func applyPorts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now string, items []domain.Port, hosts, services map[string]int64) (int, error) {
-	old := []string{}
-	rows, err := tx.QueryContext(ctx, `SELECT natural_key FROM ports WHERE connector_id=? ORDER BY natural_key`, connectorID)
+	old := map[string]portRow{}
+	rows, err := tx.QueryContext(ctx, `SELECT id,service_id,host_id,number,protocol,published,host_ip,container_port,source,natural_key FROM ports WHERE connector_id=?`, connectorID)
 	if err != nil {
 		return 0, err
 	}
 	for rows.Next() {
-		var k string
-		if err = rows.Scan(&k); err != nil {
+		var r portRow
+		var key string
+		if err = rows.Scan(&r.id, &r.serviceID, &r.hostID, &r.number, &r.protocol, &r.published, &r.hostIP, &r.containerPort, &r.source, &key); err != nil {
 			rows.Close()
 			return 0, err
 		}
-		old = append(old, k)
+		old[key] = r
 	}
 	rows.Close()
-	newKeys := make([]string, 0, len(items))
+
+	changes := 0
+	seen := map[string]bool{}
 	for _, p := range items {
-		newKeys = append(newKeys, p.NaturalKey())
-	}
-	sort.Strings(newKeys)
-	if slices.Equal(old, newKeys) {
-		return 0, nil
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM ports WHERE connector_id=?`, connectorID); err != nil {
-		return 0, err
-	}
-	for _, p := range items {
+		key := p.NaturalKey()
+		if seen[key] {
+			continue // a snapshot may repeat a natural key; keep the first.
+		}
+		seen[key] = true
 		sid, ok := services[p.ServiceKey]
 		if !ok {
 			return 0, fmt.Errorf("port references unknown service %q", p.ServiceKey)
 		}
-		var hid any
+		var hid sql.NullInt64
 		if id, ok := hosts[p.HostKey]; ok {
-			hid = id
+			hid = sql.NullInt64{Int64: id, Valid: true}
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO ports(connector_id,service_id,host_id,number,protocol,published,host_ip,container_port,source,natural_key) VALUES(?,?,?,?,?,?,?,?,?,?)`, connectorID, sid, hid, p.Number, defaultString(p.Protocol, "tcp"), p.Published, p.HostIP, p.ContainerPort, p.Source, p.NaturalKey()); err != nil {
+		protocol := defaultString(p.Protocol, "tcp")
+		if prev, exists := old[key]; exists {
+			// Reconcile in place so the id (and its metadata) survives. Only mutable
+			// columns (published, source) or a re-linked service/host can differ for
+			// a stable natural key; write and record a change only when they do.
+			diff := map[string]any{}
+			if prev.published != p.Published {
+				diff["published"] = map[string]any{"before": prev.published, "after": p.Published}
+			}
+			if prev.source != p.Source {
+				diff["source"] = map[string]any{"before": prev.source, "after": p.Source}
+			}
+			relinked := prev.serviceID != sid || prev.hostID != hid
+			if len(diff) > 0 || relinked {
+				if _, err = tx.ExecContext(ctx, `UPDATE ports SET service_id=?,host_id=?,number=?,protocol=?,published=?,host_ip=?,container_port=?,source=? WHERE id=?`, sid, hid, p.Number, protocol, p.Published, p.HostIP, p.ContainerPort, p.Source, prev.id); err != nil {
+					return 0, err
+				}
+			}
+			if len(diff) > 0 {
+				if err = addChange(ctx, tx, runID, "port", prev.id, "modified", fmt.Sprintf("Port %d/%s changed", p.Number, protocol), diff, now); err != nil {
+					return 0, err
+				}
+				changes++
+			}
+			continue
+		}
+		res, e := tx.ExecContext(ctx, `INSERT INTO ports(connector_id,service_id,host_id,number,protocol,published,host_ip,container_port,source,natural_key) VALUES(?,?,?,?,?,?,?,?,?,?)`, connectorID, sid, hid, p.Number, protocol, p.Published, p.HostIP, p.ContainerPort, p.Source, key)
+		if e != nil {
+			return 0, e
+		}
+		id, _ := res.LastInsertId()
+		if e = addChange(ctx, tx, runID, "port", id, "added", fmt.Sprintf("Port %d/%s discovered", p.Number, protocol), map[string]any{"natural_key": key}, now); e != nil {
+			return 0, e
+		}
+		changes++
+	}
+
+	// Remove ports no longer present, emitting the removal against the real (old)
+	// id so the entity history drawer shows it. Sorted for deterministic output.
+	absent := make([]string, 0)
+	for key := range old {
+		if !seen[key] {
+			absent = append(absent, key)
+		}
+	}
+	sort.Strings(absent)
+	for _, key := range absent {
+		prev := old[key]
+		if err = addChange(ctx, tx, runID, "port", prev.id, "removed", fmt.Sprintf("Port %d/%s no longer observed", prev.number, prev.protocol), map[string]any{"natural_key": key}, now); err != nil {
 			return 0, err
 		}
+		if _, err = tx.ExecContext(ctx, `DELETE FROM ports WHERE id=?`, prev.id); err != nil {
+			return 0, err
+		}
+		changes++
 	}
-	diff := map[string]any{"before": old, "after": newKeys}
-	if err = addChange(ctx, tx, runID, "ports", connectorID, "modified", "Published ports changed", diff, now); err != nil {
-		return 0, err
-	}
-	return 1, nil
+	return changes, nil
 }
 
 func applyRoutes(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now string, items []domain.Route, services map[string]int64) (int, error) {
@@ -535,6 +660,86 @@ func markGone(ctx context.Context, tx *sql.Tx, table string, connectorID, runID 
 		}
 	}
 	return len(absent), nil
+}
+
+// linkRouteCerts populates routes.cert_id, which no other code path ever writes,
+// leaving the per-route certificate-expiry column permanently NULL. It matches an
+// active route's domain against the subject or SANs of active certificates (exact,
+// case-insensitive; wildcards are intentionally not matched). Only a unique cert
+// links — ambiguous or absent matches leave cert_id NULL — and rows are written
+// only when the link actually changes, so identical rescans do not churn.
+func linkRouteCerts(ctx context.Context, tx *sql.Tx) error {
+	// domain -> distinct cert ids that cover it via subject or a SAN.
+	coverage := map[string]map[int64]bool{}
+	cover := func(domainName string, id int64) {
+		key := normalizeDomain(domainName)
+		if key == "" {
+			return
+		}
+		if coverage[key] == nil {
+			coverage[key] = map[int64]bool{}
+		}
+		coverage[key][id] = true
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,subject,sans FROM certs WHERE state='active'`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id int64
+		var subject, sansJSON string
+		if err = rows.Scan(&id, &subject, &sansJSON); err != nil {
+			rows.Close()
+			return err
+		}
+		cover(subject, id)
+		var sans []string
+		_ = json.Unmarshal([]byte(sansJSON), &sans)
+		for _, s := range sans {
+			cover(s, id)
+		}
+	}
+	rows.Close()
+
+	type routeRow struct {
+		id     int64
+		domain string
+		certID sql.NullInt64
+	}
+	var routes []routeRow
+	rows, err = tx.QueryContext(ctx, `SELECT id,domain,cert_id FROM routes WHERE state='active' AND domain!=''`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var rr routeRow
+		if err = rows.Scan(&rr.id, &rr.domain, &rr.certID); err != nil {
+			rows.Close()
+			return err
+		}
+		routes = append(routes, rr)
+	}
+	rows.Close()
+
+	for _, rr := range routes {
+		var want sql.NullInt64
+		if set := coverage[normalizeDomain(rr.domain)]; len(set) == 1 {
+			for id := range set {
+				want = sql.NullInt64{Int64: id, Valid: true}
+			}
+		}
+		if want == rr.certID {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE routes SET cert_id=? WHERE id=?`, want, rr.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeDomain(s string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), "."))
 }
 
 func addChange(ctx context.Context, tx *sql.Tx, runID int64, entity string, id int64, kind, summary string, diff any, now string) error {

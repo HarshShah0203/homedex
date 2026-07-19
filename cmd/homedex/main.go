@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -86,8 +87,12 @@ func run() error {
 		return err
 	}
 	go scheduler.Run(appCtx)
-	handler := server.New(st, broker, server.Config{Version: version, NoAuth: envBool("HOMEDEX_NO_AUTH", false), SecureCookies: envBool("HOMEDEX_SECURE_COOKIES", false), TrustedProxies: trustedProxies, ConnectorConfigs: configs, Registry: registry, Runner: runner, Notifications: notifications})
+	secureCookies := envBool("HOMEDEX_SECURE_COOKIES", false)
+	handler := server.New(st, broker, server.Config{Version: version, NoAuth: envBool("HOMEDEX_NO_AUTH", false), SecureCookies: secureCookies, TrustedProxies: trustedProxies, ConnectorConfigs: configs, Registry: registry, Runner: runner, Notifications: notifications})
 	httpServer := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 60 * time.Second}
+	if !secureCookies && !isLoopbackListen(*listen) {
+		slog.Warn("WARNING: HOMEDEX_SECURE_COOKIES is off and Homedex is not bound to loopback; the session cookie will be sent in cleartext. Terminate TLS at a trusted proxy and set HOMEDEX_SECURE_COOKIES=true.", "address", *listen)
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("homedex listening", "address", *listen, "version", version)
@@ -110,6 +115,26 @@ func run() error {
 		return err
 	}
 }
+// isLoopbackListen reports whether the listen address is bound to loopback only.
+// An empty host (e.g. ":7377") binds every interface, so it is not loopback.
+func isLoopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 func envString(key, def string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
