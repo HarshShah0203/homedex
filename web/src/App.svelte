@@ -12,7 +12,7 @@
   let inventory = $state<Inventory>(createEmptyInventory());
   let loading = $state(true);
   let paletteOpen = $state(false);
-  let theme = $state<'dark' | 'light'>('dark');
+  let theme = $state<'dark' | 'light'>('light');
   let authRequired = $state(false);
   let needsAdmin = $state(false);
   let pathname = $derived($route.split('?')[0]);
@@ -32,7 +32,7 @@
   }
 
   onMount(async () => {
-    theme = localStorage.getItem('homedex-theme') === 'light' ? 'light' : 'dark';
+    theme = localStorage.getItem('homedex-theme') === 'dark' ? 'dark' : 'light';
     try {
       const status = await getSetupStatus();
       needsAdmin = !status.configured && !status.auth_disabled;
