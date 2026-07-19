@@ -1,15 +1,37 @@
 <script lang="ts">
   import { X } from 'lucide-svelte';
-  import type { Inventory } from './api';
+  import { patchEntity, type Inventory } from './api';
   import type { Host } from './types';
   import { navigate } from './router';
   import { relativeTime } from './time';
 
-  let { host, inventory }: { host: Host; inventory: Inventory } = $props();
+  let { host, inventory, readOnly = false }: { host: Host; inventory: Inventory; readOnly?: boolean } = $props();
   let tab = $state<'Overview' | 'Notes' | 'History'>('Overview');
   let services = $derived(inventory.services.filter((service) => service.host === host.name));
   let ports = $derived(inventory.ports.filter((port) => port.host === host.name));
   let routes = $derived(inventory.routes.filter((route) => route.upstream_host === host.name || services.some((service) => service.name === route.service)));
+
+  let notesDraft = $state('');
+  let notesStatus = $state<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  let notesError = $state('');
+
+  $effect(() => {
+    notesDraft = (host as { notes?: string }).notes ?? '';
+    notesStatus = 'idle';
+    notesError = '';
+  });
+
+  async function saveNotes() {
+    notesStatus = 'saving';
+    notesError = '';
+    try {
+      await patchEntity('host', host.id, { notes: notesDraft });
+      notesStatus = 'saved';
+    } catch (cause) {
+      notesStatus = 'error';
+      notesError = cause instanceof Error ? cause.message : 'Notes could not be saved.';
+    }
+  }
 
   function close() {
     navigate('/hosts');
@@ -42,7 +64,18 @@
         {#each ports.slice(0, 1) as port}<div class="connected-row"><b>P</b><div><strong>{port.number} / {port.protocol}</strong><small>Port · {port.published ? 'published' : 'internal'} · {port.service}</small></div><i>›</i></div>{/each}
       </section>
     {:else if tab === 'Notes'}
-      <section class="inspect-section"><h3>PRIVATE NOTE</h3><p class="inspector-copy">Primary storage host. Original media remains on the host and is never included in Copy my lab.</p></section>
+      <section class="inspect-section"><h3>PRIVATE NOTE</h3>
+        {#if readOnly}
+          <p class="inspector-copy">{notesDraft || 'No notes recorded.'}</p>
+        {:else}
+          <textarea class="inline-search" aria-label="Host notes" rows="5" bind:value={notesDraft} disabled={notesStatus === 'saving'} placeholder="Record private notes for this host."></textarea>
+          <div class="source-editor">
+            <button class="primary-button" disabled={notesStatus === 'saving'} onclick={saveNotes}>{notesStatus === 'saving' ? 'Saving…' : 'Save notes'}</button>
+            {#if notesStatus === 'saved'}<span class="status ok" role="status">Notes saved.</span>{/if}
+            {#if notesStatus === 'error'}<span class="status bad" role="alert">{notesError}</span>{/if}
+          </div>
+        {/if}
+      </section>
     {:else}
       <section class="inspect-section"><h3>OBSERVATION HISTORY</h3><div class="connected-row"><b>42</b><div><strong>Current scan</strong><small>Observed {host.last_seen ? relativeTime(host.last_seen) : 'recently'} · no factual changes</small></div></div><div class="connected-row"><b>41</b><div><strong>Prior scan</strong><small>Observed 17 minutes ago · complete</small></div></div></section>
     {/if}

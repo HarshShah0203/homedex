@@ -1,14 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { contextLimit, loadContextExport } from '../api';
+  import { contextLimit, downloadExport, loadContextExport } from '../api';
   import type { ContextExport } from '../types';
   import PageHead from '../PageHead.svelte';
+  import SharesPanel from '../SharesPanel.svelte';
 
   type ScopeItem = [string, string, string, boolean];
+
+  let { readOnly = false }: { readOnly?: boolean } = $props();
 
   let context = $state<ContextExport | null>(null);
   let error = $state('');
   let copied = $state(false);
+  let downloading = $state('');
+  let downloadError = $state('');
   let omitted = $derived(context ? Object.values(context.truncation).reduce((sum, count) => sum + count, 0) : 0);
   let scope = $derived<ScopeItem[]>([
     ['Services', 'Current records', context ? String(context.counts.services) : '—', true],
@@ -31,6 +36,19 @@
     copied = true;
     window.setTimeout(() => (copied = false), 1800);
   }
+
+  async function download(format: 'markdown' | 'json' | 'csv', view?: string) {
+    if (downloading) return;
+    downloading = view ? `${format}:${view}` : format;
+    downloadError = '';
+    try {
+      await downloadExport(format, view);
+    } catch (reason) {
+      downloadError = reason instanceof Error ? reason.message : 'The export could not be downloaded.';
+    } finally {
+      downloading = '';
+    }
+  }
 </script>
 
 <main class="page">
@@ -43,6 +61,13 @@
       {#each scope as item}<div class="check-row"><span class:on={item[3]} class="checkbox">{item[3] ? '✓' : ''}</span><div><strong>{item[0]}</strong><small>{item[1]}</small></div><code>{item[2]}</code></div>{/each}
       <div class="scope-section"><div class="section-label">Size budget</div><h3>{context?.size ?? '—'} of {contextLimit}</h3><p>{omitted ? `${omitted} records omitted to stay inside the budget.` : 'Deterministic ordering: object type, then record ID.'}</p></div>
       <button class="primary-button copy-exact" disabled={!context} onclick={copyMarkdown}>{copied ? 'Copied to clipboard' : 'Copy exact Markdown'}</button>
+      <div class="scope-section"><div class="section-label">Downloads</div></div>
+      <div class="source-editor">
+        <button class="quiet-button" disabled={Boolean(downloading)} onclick={() => download('markdown')}>Markdown</button>
+        <button class="quiet-button" disabled={Boolean(downloading)} onclick={() => download('json')}>JSON</button>
+        <button class="quiet-button" disabled={Boolean(downloading)} onclick={() => download('csv', 'services')}>CSV (services)</button>
+        {#if downloadError}<span class="status bad" role="alert">{downloadError}</span>{/if}
+      </div>
     </aside>
     <article class="preview">
       <header class="preview-head"><strong>Exact Markdown preview</strong><span>{context ? `${context.filename.toUpperCase()} · ${context.size}` : 'LOADING BACKEND CONTEXT'}</span></header>
@@ -54,4 +79,5 @@
       <section class="safety-receipt" data-component-id="export-safety-receipt"><div class="section-label">Mandatory safety receipt</div><div class="receipt-line"><span>Connector credentials</span><span>EXCLUDED</span></div><div class="receipt-line"><span>Private notes</span><span>EXCLUDED BY DEFAULT</span></div><div class="receipt-line"><span>Raw labels</span><span>EXCLUDED BY DEFAULT</span></div><div class="receipt-line"><span>Secret-like labels</span><span>MASKED</span></div><div class="receipt-line"><span><code>Config.Env</code></span><span>NEVER INGESTED</span></div><div class="receipt-line"><span>SHA-256</span><span>{context?.shortSha256 ?? 'PENDING'}</span></div></section>
     </article>
   </section>
+  <SharesPanel {readOnly} />
 </main>

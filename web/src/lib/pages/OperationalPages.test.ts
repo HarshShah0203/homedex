@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDemoInventory } from '../demo';
 import ChangesPage from './ChangesPage.svelte';
 import PortsPage from './PortsPage.svelte';
+import HostsPage from './HostsPage.svelte';
+import HostInspector from '../HostInspector.svelte';
 
 afterEach(() => {
   cleanup();
@@ -42,6 +44,64 @@ describe('operational page actions', () => {
 
     expect(await screen.findByText('2202')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/ports/next-free?host_id=2&start=1024&end=65535&protocol=tcp', expect.any(Object));
+  });
+
+  it('flags a seeded port conflict with a badge and meta count', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.startsWith('/api/ports/conflicts')) {
+        return new Response(JSON.stringify({ items: [{ host_id: 1, number: 80, protocol: 'tcp', count: 2, service_ids: ['3'] }], total: 1 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ port: 1101 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const inventory = createDemoInventory();
+    inventory.source = 'api';
+
+    render(PortsPage, { props: { inventory } });
+
+    expect(await screen.findByText('conflict ×2')).toBeInTheDocument();
+    expect(screen.getByText('15 declarations · 1 conflicts')).toBeInTheDocument();
+  });
+
+  it('posts a manual host with the expected body and refreshes', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 99 }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const onrefresh = vi.fn(async () => {});
+    const inventory = createDemoInventory();
+    inventory.source = 'api';
+
+    render(HostsPage, { props: { path: '/hosts', inventory, onrefresh } });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Add manual host' }));
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'printer' } });
+    await fireEvent.input(screen.getByLabelText('Address'), { target: { value: '10.0.0.50' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Add host' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/entities', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ entity_type: 'host', kind: 'manual', name: 'printer', address: '10.0.0.50' })
+    })));
+    await waitFor(() => expect(onrefresh).toHaveBeenCalled());
+  });
+
+  it('saves host notes through the entity patch endpoint', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: 1 }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const inventory = createDemoInventory();
+    inventory.source = 'api';
+
+    render(HostInspector, { props: { host: inventory.hosts[0], inventory, readOnly: false } });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
+    await fireEvent.input(screen.getByLabelText('Host notes'), { target: { value: 'Moved to rack' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save notes' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/entities/host/${inventory.hosts[0].id}`, expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ notes: 'Moved to rack' })
+    })));
+    expect(await screen.findByText('Notes saved.')).toBeInTheDocument();
   });
 
   it('hides change mutations in a shared inventory', () => {

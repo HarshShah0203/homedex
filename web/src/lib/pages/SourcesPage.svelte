@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { deleteConnector, scanConnector, testSavedConnector, updateConnector, type Inventory } from '../api';
+  import { createConnector, deleteConnector, scanConnector, testConnector, testSavedConnector, updateConnector, type Inventory } from '../api';
+  import type { ConnectorConfig, ConnectorInput } from '../types';
   import PageHead from '../PageHead.svelte';
   import { navigate } from '../router';
   import { relativeTime } from '../time';
@@ -12,6 +13,149 @@
   let editSchedule = $state(15);
   let confirmingID = $state<number | null>(null);
   let confirmTimer = 0;
+
+  const addKinds = [
+    { kind: 'docker', label: 'Docker', name: 'Docker', schedule: 15 },
+    { kind: 'traefik', label: 'Traefik', name: 'Traefik', schedule: 15 },
+    { kind: 'caddy', label: 'Caddy', name: 'Caddy', schedule: 15 },
+    { kind: 'npm', label: 'Nginx Proxy Manager', name: 'Nginx Proxy Manager', schedule: 15 },
+    { kind: 'tlsprobe', label: 'TLS probe', name: 'TLS probe', schedule: 1440 },
+    { kind: 'rdap', label: 'RDAP domains', name: 'RDAP domains', schedule: 1440 }
+  ];
+
+  let adding = $state(false);
+  let addKind = $state('docker');
+  let addName = $state('Docker');
+  let addSchedule = $state(15);
+  let addBusy = $state(false);
+  let addStatus = $state<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  let addNotice = $state<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  let verifiedFingerprint = $state('');
+
+  // Kind-specific field values. Shared names (url, password) are reused across
+  // kinds that need them; buildConfig() only reads the fields for the active kind.
+  let fEndpoint = $state('tcp://docker-socket-proxy:2375');
+  let fHostName = $state('');
+  let fHostAddress = $state('');
+  let fUrl = $state('');
+  let fUsername = $state('');
+  let fPassword = $state('');
+  let fEmail = $state('');
+  let fTargets = $state('');
+  let fTimeout = $state<number | null>(null);
+  let fDomains = $state('');
+
+  function splitLines(value: string): string[] {
+    return value.split('\n').map((line) => line.trim()).filter(Boolean);
+  }
+
+  function buildConfig(): ConnectorConfig {
+    switch (addKind) {
+      case 'traefik':
+        return { url: fUrl.trim(), username: fUsername.trim(), password: fPassword };
+      case 'caddy':
+        return { url: fUrl.trim() };
+      case 'npm':
+        return { url: fUrl.trim(), email: fEmail.trim(), password: fPassword };
+      case 'tlsprobe':
+        return { targets: splitLines(fTargets), ...(fTimeout && fTimeout > 0 ? { timeout_seconds: fTimeout } : {}) };
+      case 'rdap':
+        return { domains: splitLines(fDomains) };
+      default:
+        return { endpoint: fEndpoint.trim(), host_name: fHostName.trim(), host_address: fHostAddress.trim() };
+    }
+  }
+
+  function addInput(): ConnectorInput {
+    return { kind: addKind, name: addName.trim(), config: buildConfig(), enabled: true, schedule_minutes: addSchedule };
+  }
+
+  let addFingerprint = $derived(JSON.stringify(addInput()));
+  let addVerified = $derived(verifiedFingerprint === addFingerprint);
+
+  function toggleAdd() {
+    adding = !adding;
+    if (adding) applyKind(addKind, true);
+  }
+
+  function applyKind(kind: string, resetName = true) {
+    addKind = kind;
+    const preset = addKinds.find((item) => item.kind === kind);
+    if (preset && resetName) {
+      addName = preset.name;
+      addSchedule = preset.schedule;
+    }
+    verifiedFingerprint = '';
+    addStatus = null;
+  }
+
+  async function testAdd() {
+    if (!addName.trim()) {
+      addStatus = { tone: 'bad', text: 'A source name is required.' };
+      return;
+    }
+    addBusy = true;
+    addStatus = { tone: 'ok', text: 'Testing connection…' };
+    try {
+      const result = await testConnector(addInput());
+      if (result.status === 'ok') {
+        verifiedFingerprint = addFingerprint;
+        addStatus = { tone: 'ok', text: 'Connection verified.' };
+      } else {
+        verifiedFingerprint = '';
+        addStatus = { tone: 'bad', text: result.error || 'Connection test failed.' };
+      }
+    } catch (cause) {
+      verifiedFingerprint = '';
+      addStatus = { tone: 'bad', text: cause instanceof Error ? cause.message : 'Connection test failed.' };
+    } finally {
+      addBusy = false;
+    }
+  }
+
+  async function saveAdd() {
+    if (!addVerified) {
+      addStatus = { tone: 'bad', text: 'Test the current settings before saving.' };
+      return;
+    }
+    addBusy = true;
+    addStatus = { tone: 'ok', text: 'Saving and scanning…' };
+    try {
+      const result = await createConnector(addInput());
+      if (result.scan_error) {
+        addNotice = { tone: 'bad', text: `Source added, first scan failed: ${result.scan_error}` };
+      } else {
+        addNotice = { tone: 'ok', text: `Source added, ${result.changes} changes recorded.` };
+      }
+      adding = false;
+      resetAdd();
+      await onrefresh();
+    } catch (cause) {
+      addStatus = { tone: 'bad', text: cause instanceof Error ? cause.message : 'The source could not be saved.' };
+    } finally {
+      addBusy = false;
+    }
+  }
+
+  function cancelAdd() {
+    adding = false;
+    resetAdd();
+  }
+
+  function resetAdd() {
+    verifiedFingerprint = '';
+    addStatus = null;
+    fUrl = '';
+    fUsername = '';
+    fPassword = '';
+    fEmail = '';
+    fTargets = '';
+    fTimeout = null;
+    fDomains = '';
+    fEndpoint = 'tcp://docker-socket-proxy:2375';
+    fHostName = '';
+    fHostAddress = '';
+  }
 
   function armDelete(id: number) {
     confirmingID = id;
@@ -108,11 +252,51 @@
 
 <main class="page">
   <PageHead title="Sources" meta={`${inventory.connectors.length} configured`}>
-    {#snippet actions()}{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/setup')}>Add source</button>{/if}{/snippet}
+    {#snippet actions()}{#if !inventory.readOnly}<button class="primary-button" onclick={toggleAdd}>{adding ? 'Close add form' : 'Add source'}</button>{/if}{/snippet}
   </PageHead>
   <section class="settings-layout">
     <div class="sources-register">
       <div class="toolbar sources-toolbar"><span class="toolbar-meta">{inventory.connectors.length} SOURCES · {inventory.connectors.filter((connector) => connector.enabled && connectorTone(connector) === 'ok').length} CONNECTED</span></div>
+      {#if addNotice}<span class={`status ${addNotice.tone}`} role="status">{addNotice.text}</span>{/if}
+      {#if !inventory.readOnly && adding}
+        <form class="source-editor" data-component-id="add-source-form" onsubmit={(event) => { event.preventDefault(); saveAdd(); }}>
+          <div class="section-label">Add source</div>
+          <label class="field-label">Source type
+            <select bind:value={addKind} onchange={(event) => applyKind((event.currentTarget as HTMLSelectElement).value)}>
+              {#each addKinds as item}<option value={item.kind}>{item.label}</option>{/each}
+            </select>
+          </label>
+          <label class="field-label">Source name <input bind:value={addName} /></label>
+          {#if addKind === 'docker'}
+            <label class="field-label">Read-only endpoint <input bind:value={fEndpoint} placeholder="tcp://docker-socket-proxy:2375" /></label>
+            <label class="field-label">Host name <input bind:value={fHostName} placeholder="Optional" /></label>
+            <label class="field-label">Host address <input bind:value={fHostAddress} placeholder="Optional" /></label>
+          {:else if addKind === 'traefik'}
+            <label class="field-label">Traefik URL <input bind:value={fUrl} placeholder="https://traefik.lab.internal" /></label>
+            <label class="field-label">Username <input bind:value={fUsername} placeholder="Optional" /></label>
+            <label class="field-label">Password <input type="password" bind:value={fPassword} /></label>
+          {:else if addKind === 'caddy'}
+            <label class="field-label">Admin endpoint <input bind:value={fUrl} placeholder="http://caddy:2019" /></label>
+          {:else if addKind === 'npm'}
+            <label class="field-label">NPM URL <input bind:value={fUrl} placeholder="https://proxy.lab.internal" /></label>
+            <label class="field-label">Read-only account <input type="email" bind:value={fEmail} /></label>
+            <label class="field-label">Password <input type="password" bind:value={fPassword} /></label>
+          {:else if addKind === 'tlsprobe'}
+            <label class="field-label">Targets, one per line <textarea bind:value={fTargets} rows="3" placeholder="example.com:443"></textarea></label>
+            <label class="field-label">Timeout, seconds <input type="number" min="1" bind:value={fTimeout} placeholder="Optional" /></label>
+          {:else if addKind === 'rdap'}
+            <label class="field-label">Domains, one per line <textarea bind:value={fDomains} rows="3" placeholder="example.com"></textarea></label>
+          {/if}
+          <label class="field-label">Schedule, minutes <input type="number" min="1" bind:value={addSchedule} /></label>
+          <div class="register-row">
+            <button type="button" class="quiet-button" disabled={addBusy} onclick={testAdd}>{addVerified ? 'Connection verified' : 'Test connection'}</button>
+            <button class="primary-button" disabled={addBusy || !addVerified}>Save and scan</button>
+            <button type="button" class="quiet-button" disabled={addBusy} onclick={cancelAdd}>Cancel</button>
+            {#if addStatus}<span class={`status ${addStatus.tone}`} role="status">{addStatus.text}</span>{/if}
+          </div>
+          {#if addKind === 'docker'}<small class="field-help"><a href="/setup" onclick={(event) => { event.preventDefault(); navigate('/setup'); }}>Or use the guided setup</a></small>{/if}
+        </form>
+      {/if}
       <section class="register" data-component-id="source-register">
         <header class="register-head source-cols"><span>Source</span><span>Endpoint</span><span>State</span><span>Indexed</span><span>Schedule</span></header>
         {#if inventory.connectors.length}

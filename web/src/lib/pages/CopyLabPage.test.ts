@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import CopyLabPage from './CopyLabPage.svelte';
 
 afterEach(() => {
+  cleanup();
   vi.unstubAllGlobals();
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
 });
@@ -68,5 +69,31 @@ Schema: \`homedex.inventory.v1\`
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(markdown));
     expect(screen.getByRole('button', { name: 'Markdown copied' })).toBeInTheDocument();
+  });
+
+  it('renders the downloads row and triggers a CSV services export', async () => {
+    vi.stubGlobal('crypto', { subtle: { digest: vi.fn().mockResolvedValue(new Uint8Array(32).buffer) } });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.startsWith('/api/export/csv')) {
+        return new Response('host,service\n', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="services.csv"' } });
+      }
+      return new Response('# Homedex lab context\n', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="homedex-context.md"' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:x'), revokeObjectURL: vi.fn() }));
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    render(CopyLabPage);
+
+    const csv = await screen.findByRole('button', { name: 'CSV (services)' });
+    expect(screen.getByRole('button', { name: 'Markdown' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'JSON' })).toBeInTheDocument();
+
+    await fireEvent.click(csv);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/export/csv?view=services'));
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+    clickSpy.mockRestore();
   });
 });
