@@ -169,7 +169,14 @@ async function requestJSON<T = void>(path: string, options: RequestOptions = {})
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrf) headers['X-Homedex-CSRF'] = csrf;
   const response = await fetch(path, { method, headers, ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }) });
   if (!response.ok && !options.acceptedStatuses?.includes(response.status)) {
-    const message = (await response.text()).trim() || `The request returned ${response.status}.`;
+    const raw = (await response.text()).trim();
+    let message = raw || `The request returned ${response.status}.`;
+    try {
+      const parsed = JSON.parse(raw) as { error?: string; message?: string };
+      message = parsed.error || parsed.message || message;
+    } catch {
+      // Non-JSON body: keep the raw text.
+    }
     throw new APIError(path, response.status, message);
   }
   if (response.status === 204) return undefined as T;

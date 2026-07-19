@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Inventory } from '../api';
   import PageHead from '../PageHead.svelte';
+  import { plural } from '../time';
   import HostInspector from '../HostInspector.svelte';
   import { navigate } from '../router';
 
@@ -21,7 +22,7 @@
 </script>
 
 <main class="page">
-  <PageHead title="Hosts" meta={`${hosts.length} hosts · ${serviceTotal} services`}>
+  <PageHead title="Hosts" meta={`${plural(hosts.length, 'host')} · ${plural(serviceTotal, 'service')}`}>
     {#snippet actions()}{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/sources')}>Manage sources</button>{/if}{/snippet}
   </PageHead>
   {#if hosts.length}
