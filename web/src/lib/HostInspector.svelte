@@ -3,6 +3,7 @@
   import type { Inventory } from './api';
   import type { Host } from './types';
   import { navigate } from './router';
+  import { relativeTime } from './time';
 
   let { host, inventory }: { host: Host; inventory: Inventory } = $props();
   let tab = $state<'Overview' | 'Notes' | 'History'>('Overview');
@@ -25,7 +26,7 @@
   <header class="inspector-head">
     <div class="row"><span class="section-label">Connected-record inspector</span><button class="icon-button" aria-label="Close inspector" onclick={close}><X size={15} /></button></div>
     <h2>{host.name}</h2>
-    <p>HST-{String(host.id).padStart(3, '0')} · {host.kind.toUpperCase()} · OBSERVED {host.last_seen ?? 'RECENTLY'}</p>
+    <p>HST-{String(host.id).padStart(3, '0')} · {host.kind.toUpperCase()} · OBSERVED {host.last_seen ? relativeTime(host.last_seen) : 'recently'}</p>
   </header>
   <nav class="tabs" aria-label="Inspector sections">
     {#each ['Overview', 'Notes', 'History'] as item}
@@ -34,7 +35,7 @@
   </nav>
   <div class="inspector-body">
     {#if tab === 'Overview'}
-      <section class="inspect-section"><h3>HOST FACTS</h3><dl class="definition-list"><div><dt>Address</dt><dd class="mono">{host.address}</dd></div><div><dt>System</dt><dd>{host.os} · {host.arch}</dd></div><div><dt>Engine</dt><dd>Docker 28.1.1</dd></div><div><dt>Source</dt><dd>docker-socket-proxy</dd></div><div><dt>Last seen</dt><dd>{host.last_seen ?? 'Recently'}</dd></div></dl></section>
+      <section class="inspect-section"><h3>HOST FACTS</h3><dl class="definition-list"><div><dt>Address</dt><dd class="mono">{host.address}</dd></div><div><dt>System</dt><dd>{host.os} · {host.arch}</dd></div><div><dt>Engine</dt><dd>Docker 28.1.1</dd></div><div><dt>Source</dt><dd>docker-socket-proxy</dd></div><div><dt>Last seen</dt><dd>{host.last_seen ? relativeTime(host.last_seen) : 'Recently'}</dd></div></dl></section>
       <section class="inspect-section"><h3>CONNECTED RECORDS · {services.length + ports.length + routes.length}</h3>
         {#each services.slice(0, 2) as service}<div class="connected-row"><b>S</b><div><strong>{service.name}</strong><small>Service · {service.stack} · {service.state}</small></div><i>›</i></div>{/each}
         {#each routes.slice(0, 1) as route}<div class="connected-row"><b>R</b><div><strong>{route.domain}</strong><small>Route · {route.proxy}</small></div><i>›</i></div>{/each}
@@ -43,7 +44,7 @@
     {:else if tab === 'Notes'}
       <section class="inspect-section"><h3>PRIVATE NOTE</h3><p class="inspector-copy">Primary storage host. Original media remains on the host and is never included in Copy my lab.</p></section>
     {:else}
-      <section class="inspect-section"><h3>OBSERVATION HISTORY</h3><div class="connected-row"><b>42</b><div><strong>Current scan</strong><small>Observed {host.last_seen ?? 'recently'} · no factual changes</small></div></div><div class="connected-row"><b>41</b><div><strong>Prior scan</strong><small>Observed 17 minutes ago · complete</small></div></div></section>
+      <section class="inspect-section"><h3>OBSERVATION HISTORY</h3><div class="connected-row"><b>42</b><div><strong>Current scan</strong><small>Observed {host.last_seen ? relativeTime(host.last_seen) : 'recently'} · no factual changes</small></div></div><div class="connected-row"><b>41</b><div><strong>Prior scan</strong><small>Observed 17 minutes ago · complete</small></div></div></section>
     {/if}
   </div>
 </div>

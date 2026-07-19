@@ -38,7 +38,7 @@
     <div class="search-dialog" role="dialog" aria-modal="true" aria-label="Search every record">
       <label class="search-entry">
         <Search size={21} aria-hidden="true" />
-        <input bind:this={input} bind:value={query} aria-label="Search query" autocomplete="off" />
+        <input bind:this={input} bind:value={query} aria-label="Search query" autocomplete="off" placeholder="Search records" />
         <button class="search-close" aria-label="Close search" onclick={() => (open = false)}><X size={16} /><span>ESC</span></button>
       </label>
       <div class="search-summary"><strong>{resultCount} result{resultCount === 1 ? '' : 's'}</strong> across the current index · exact and connected-record matches</div>
@@ -60,7 +60,7 @@
       {:else}
         <div class="empty-register compact"><strong>No records match “{query}”.</strong><span>Try a service, route, port, or host name.</span></div>
       {/if}
-      <footer class="search-footer"><span>↑ ↓ SELECT</span><span>↵ OPEN</span><span>⌘ ↵ OPEN INSPECTOR</span><span>INDEX UPDATED 2M AGO</span></footer>
+      <footer class="search-footer"><span>↑ ↓ SELECT</span><span>↵ OPEN</span><span>⌘ ↵ OPEN INSPECTOR</span></footer>
     </div>
   </div>
 {/if}

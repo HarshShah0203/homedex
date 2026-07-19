@@ -13,7 +13,7 @@ Point Homedex at Docker and a supported reverse proxy to build a searchable reco
 
 Homedex is **the ledger, not the map**: it answers “what runs where?” from observed infrastructure instead of asking you to maintain another spreadsheet. It does not start, stop, or reconfigure containers.
 
-> **v0.1 status:** the discovery engine, authenticated API, scheduled reconciliation, change feed, route resolution, TLS/RDAP connectors, exports, read-only shares, notifications, manual records/metadata, and embedded Svelte inventory UI are implemented. The current UI controls for connector editing and several advanced workflows are visual previews; those operations are available through the authenticated APIs but are not all wired to buttons yet.
+> **v0.1 status:** the discovery engine, authenticated API, scheduled reconciliation, change feed, route resolution, TLS/RDAP connectors, exports, read-only shares, notifications, manual records/metadata, setup wizard, and embedded Svelte inventory UI are implemented and wired end to end.
 
 ## Quickstart
 
@@ -23,16 +23,13 @@ The default Compose stack builds locally, binds the UI to loopback, gives Homede
 git clone https://github.com/HarshShah0203/homedex.git
 cd homedex
 docker compose up -d --build
-until curl -fsS http://127.0.0.1:7377/api/health; do sleep 1; done
-./scripts/add-connector.sh --setup docker "Local Docker" \
-  docs/examples/connectors/docker-socket-proxy.json
 ```
 
-The connector script prompts for a new admin password, creates the local account, saves the encrypted connector config, and runs the first scan. Open <http://127.0.0.1:7377> after it succeeds.
+Open <http://127.0.0.1:7377>. The setup wizard creates your admin password, connects the first source (the compose stack's socket proxy at `tcp://docker-socket-proxy:2375` is prefilled), tests it read-only, and runs the first scan live — your services, ports, and hosts appear in about a minute.
 
-If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose and point `HOMEDEX_URL` at the same loopback port for connector setup.
+If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose.
 
-The onboarding screens currently preview the intended connector wizard but do not persist connector settings. Use `scripts/add-connector.sh` for v0.1. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, TLS, RDAP, remote Docker, and authenticated follow-up connector commands.
+Prefer automation? `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, TLS, RDAP, and remote Docker sources — all of which can also be added in the UI under **Sources**.
 
 ### Why the socket proxy matters
 

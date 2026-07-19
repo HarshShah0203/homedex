@@ -7,11 +7,13 @@
     path,
     paletteOpen = $bindable(false),
     theme = $bindable<'dark' | 'light'>('dark'),
+    lastScan = '',
     children
   }: {
     path: string;
     paletteOpen: boolean;
     theme: 'dark' | 'light';
+    lastScan?: string;
     children: Snippet;
   } = $props();
 
@@ -51,8 +53,13 @@
 <div class="app" data-theme={theme} data-component-id="homedex-catalog-shell">
   <header class="topbar" data-component-id="global-header">
     <a class="brand" href="/" aria-label="Homedex index" onclick={(event) => follow(event, '/')}>
-      <span class="brand-mark" aria-hidden="true">H</span>
-      <span><strong>homedex</strong><small>Address book for your lab</small></span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 8.5V5a1 1 0 0 1 1-1h6.2a1 1 0 0 1 .9.55L12 6h8a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8.5Z" fill="currentColor"/>
+          <path d="M6.5 11.5h11M6.5 14.5h11M6.5 17.5h7" stroke="var(--bg)" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span><strong>homedex</strong><small>What runs where</small></span>
     </a>
     <nav class="primary-nav" data-component-id="primary-navigation" aria-label="Primary navigation">
       {#each navItems as item}
@@ -62,10 +69,10 @@
     <div class="top-actions">
       <button class="search-trigger" aria-label="Open universal search" onclick={() => (paletteOpen = true)}>
         <Search size={14} aria-hidden="true" />
-        <span>Search every record</span>
+        <span>Search records</span>
         <span class="key">⌘ K</span>
       </button>
-      <div class="scan-mark"><i class="dot ok"></i><span>Current · 2m</span></div>
+      {#if lastScan}<div class="scan-mark"><i class="dot ok"></i><span>Scanned {lastScan}</span></div>{/if}
       <button
         class="icon-button"
         aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}

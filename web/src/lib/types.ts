@@ -19,3 +19,6 @@ export type ConnectorMutation = { connector: Connector; scan_run_id: number; cha
 export type ConnectorTest = { status: 'ok' | 'error'; kind?: string; duration_ms?: number; error?: string };
 export type ScanEvent = { type: string; connector_id?: number; scan_run_id?: number; changes?: number; error?: string; phase?: string; message?: string; progress?: number; stats?: Record<string, number> };
 export type ScanRun = { id: number; started_at: string; finished_at: string | null; status: string; error: string; stats: Record<string, number> };
+export type NotificationRule = { id: number; name: string; kind: 'expiry' | 'change'; threshold_days: number | null; filters: Record<string, unknown>; channels: string[]; channel_count: number; enabled: boolean; created_at: string; updated_at: string };
+export type NotificationRuleInput = { name: string; kind: string; threshold_days?: number | null; channels: string[]; enabled?: boolean };
+export type NotificationTest = { status: 'ok' | 'error'; error?: string };

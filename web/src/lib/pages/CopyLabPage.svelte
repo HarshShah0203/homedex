@@ -34,7 +34,7 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="COPY MY LAB · DETERMINISTIC CONTEXT" title="A safe, exact copy of the index." copy="Preview the Markdown exactly as it will be copied. Ordering, schema, redactions, and hash are part of the receipt.">
+  <PageHead kicker="Export · Context" title="Copy my lab" copy="A redacted snapshot of your lab, ready to paste into an AI assistant or wiki.">
     {#snippet actions()}<button class="primary-button" disabled={!context} onclick={copyMarkdown}>{copied ? 'Markdown copied' : 'Copy Markdown'}</button>{/snippet}
   </PageHead>
   <section class="export-layout" data-component-id="copy-my-lab-workbench">

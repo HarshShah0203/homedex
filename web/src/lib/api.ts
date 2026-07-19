@@ -1,5 +1,5 @@
 import { createDemoInventory } from './demo';
-import type { Change, Connector, ConnectorInput, ConnectorMutation, ConnectorTest, ContextCounts, ContextExport, Expiry, Host, Inventory, InventoryIssue, InventoryIssueKind, InventoryResource, Port, Route, ScanRun, Service } from './types';
+import type { Change, Connector, ConnectorInput, ConnectorMutation, ConnectorTest, ContextCounts, ContextExport, Expiry, Host, Inventory, InventoryIssue, InventoryIssueKind, InventoryResource, NotificationRule, NotificationRuleInput, NotificationTest, Port, Route, ScanRun, Service } from './types';
 
 export type { Inventory } from './types';
 
@@ -132,6 +132,25 @@ export async function reviewChange(id: number, seen: boolean, note?: string): Pr
 
 export async function reviewChanges(ids: number[], seen: boolean): Promise<void> {
   await requestJSON('/api/changes', { method: 'PATCH', body: { ids, seen } });
+}
+
+export async function loadNotificationRules(): Promise<NotificationRule[]> {
+  const response = await requestJSON<ListResponse<NotificationRule>>('/api/notify/rules');
+  return response.items ?? [];
+}
+
+export async function createNotificationRule(input: NotificationRuleInput): Promise<NotificationRule> {
+  return requestJSON('/api/notify/rules', { method: 'POST', body: input });
+}
+
+export async function deleteNotificationRule(id: number): Promise<void> {
+  await requestJSON(`/api/notify/rules/${id}`, { method: 'DELETE' });
+}
+
+export async function testNotificationRule(id: number): Promise<NotificationTest> {
+  // The server reports a failed delivery with 502 and a structured
+  // {status:"error", error} body, so accept it instead of throwing.
+  return requestJSON(`/api/notify/rules/${id}/test`, { method: 'POST', acceptedStatuses: [502] });
 }
 
 export async function loadNextFreePort(hostID: number, start = 1024, end = 65535, protocol = 'tcp'): Promise<number> {

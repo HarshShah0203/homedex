@@ -17,7 +17,7 @@
 </script>
 
 {#if inventory.source === 'demo'}
-  <div class="summary-line" role="status"><strong>Development demo inventory</strong><span>{inventory.error || 'The API returned no records, so local fixture data is shown only in this development build.'}</span></div>
+  <div class="summary-line" role="status"><strong>Development demo inventory</strong><span>{inventory.error || 'Showing local demo data.'}</span></div>
 {:else if inventory.readOnly}
   <div class="summary-line" role="status"><strong>Read-only shared inventory</strong><span>Settings and all mutation controls are unavailable.</span></div>
 {:else if inventory.issues.length}
@@ -42,7 +42,7 @@
   <SourcesPage {inventory} {onrefresh} />
 {:else}
   <main class="page">
-    <PageHead kicker="INDEX · MISSING RECORD" title="That register does not exist." copy="The address may be stale, or this version of Homedex does not expose that record." />
-    <section class="empty-register"><strong>NO CURRENT RECORD</strong><span>{pathname}</span><button class="primary-button" onclick={() => navigate('/')}>Return to the index</button></section>
+    <PageHead kicker="Index · 404" title="No record here" copy="Nothing is filed at this address." />
+    <section class="empty-register"><strong>NO CURRENT RECORD</strong><span>{pathname}</span><button class="primary-button" onclick={() => navigate('/')}>Back to the index</button></section>
   </main>
 {/if}
