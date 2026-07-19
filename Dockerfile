@@ -5,7 +5,7 @@ ARG GO_IMAGE=golang:1.23-alpine
 ARG SSH_IMAGE=debian:bookworm-slim
 ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
-FROM ${NODE_IMAGE} AS web-build
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS web-build
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
@@ -35,7 +35,7 @@ RUN set -eux; \
     chmod 0700 "$root/home/nonroot/.ssh"; \
     /usr/bin/ssh -V
 
-FROM ${GO_IMAGE} AS go-base
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS go-base
 WORKDIR /src
 RUN apk add --no-cache ca-certificates git
 COPY go.mod go.sum ./
