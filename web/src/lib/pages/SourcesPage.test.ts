@@ -15,8 +15,6 @@ describe('SourcesPage connector lifecycle', () => {
     inventory.source = 'api';
     inventory.connectors = [inventory.connectors[0]];
     const onrefresh = vi.fn(async () => {});
-    const confirm = vi.fn(() => true);
-    vi.stubGlobal('confirm', confirm);
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path.endsWith('/test')) return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -40,7 +38,8 @@ describe('SourcesPage connector lifecycle', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/connectors/1', expect.objectContaining({ body: JSON.stringify({ enabled: false }) })));
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
-    expect(confirm).toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/connectors/1', expect.objectContaining({ method: 'DELETE' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Confirm delete' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/connectors/1', expect.objectContaining({ method: 'DELETE' })));
     await waitFor(() => expect(onrefresh).toHaveBeenCalledTimes(4));
   });

@@ -88,4 +88,4 @@ GoReleaser cross-compiles CGO-free archives. GitHub Actions separately uses Buil
 - Homedex writes its own SQLite state; “read-only” refers to connected infrastructure, not `/data`.
 - The process serves HTTP, not HTTPS.
 - TLS and RDAP scans are explicit connector configurations in v0.1; proxy routes do not automatically create those connector records.
-- The backend implements export, share, entity-enrichment, manual-entity, change-review, and notification APIs. The current web UI contains preview controls that are not all wired to those APIs. The README's implementation table is the user-facing contract.
+- The backend implements export, share, entity-enrichment, manual-entity, change-review, and notification APIs. The web UI wires the setup wizard, source management, change review, route register, expiry reminders, and context export to those APIs; remaining API-only surfaces (shares, manual entities, entity enrichment) are reachable through the authenticated JSON API. The README's implementation table is the user-facing contract.

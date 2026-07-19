@@ -38,8 +38,8 @@ test('covers the highest-value seeded production workflows', async ({ page }) =>
   });
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Everything, in its place.', level: 1 })).toBeVisible();
-  await expect(page.getByText('12 service records across 3 hosts.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Services', level: 1 })).toBeVisible();
+  await expect(page.getByText('12 records · 3 hosts')).toBeVisible();
 
   await page.goto(`/routes/${brokenRoute.id}`);
   await expect(page.getByRole('heading', { name: 'old.lab.example', level: 1 })).toBeVisible();
@@ -75,7 +75,7 @@ test('covers the highest-value seeded production workflows', async ({ page }) =>
   );
   await page.getByLabel('Select host for port lookup').selectOption(String(lookupHost.id));
   expect((await lookupResponse).ok()).toBe(true);
-  await expect(page.locator('[data-component-id="next-free-port"]')).toContainText(`Checked for ${lookupHost.name}`);
+  await expect(page.locator('[data-component-id="next-free-port"]')).toContainText(`checked for ${lookupHost.name}`);
 
   const changes = (await (await page.request.get('/api/changes?limit=500')).json()).items as Array<{ id: number; summary: string; seen: boolean }>;
   const change = changes.find((item) => !item.seen)!;
@@ -94,7 +94,7 @@ test('covers the highest-value seeded production workflows', async ({ page }) =>
   await expect(reviewedButton).toHaveAttribute('aria-pressed', 'true');
 
   await page.goto('/setup');
-  await expect(page.getByRole('heading', { name: 'See exactly what Homedex reads.', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'First source', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Docker metadata, read only', level: 2 })).toBeVisible();
   await expect(page.getByLabel('Read-only endpoint')).toHaveValue('unix:///var/run/docker.sock');
   await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
@@ -109,7 +109,7 @@ test('covers the highest-value seeded production workflows', async ({ page }) =>
   await page.context().clearCookies();
   await page.goto(share.share_url);
   await expect(page.getByRole('status')).toContainText('Read-only shared inventory');
-  await expect(page.getByText('12 service records across 3 hosts.')).toBeVisible();
+  await expect(page.getByText('12 records · 3 hosts')).toBeVisible();
   await page.goto('/sources');
   await expect(page.getByRole('status')).toContainText('Read-only shared inventory');
   await expect(page.getByRole('button', { name: 'Add source' })).toHaveCount(0);

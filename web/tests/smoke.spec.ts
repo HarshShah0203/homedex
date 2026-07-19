@@ -6,16 +6,16 @@ async function expectNoHorizontalOverflow(page: Page) {
 
 test('renders every approved register and both route evidence outcomes', async ({ page }) => {
   const screens = [
-    ['/', 'Everything, in its place.'],
-    ['/hosts', 'Where the address book lives.'],
+    ['/', 'Services'],
+    ['/hosts', 'Hosts'],
     ['/routes', 'photos.lab.example'],
     ['/routes/7', 'old.lab.example'],
-    ['/ports', 'Know what is already spoken for.'],
-    ['/expiry', 'What needs a date, gets a date.'],
-    ['/changes', 'What changed, without the alarm theatre.'],
-    ['/copy-my-lab', 'A safe, exact copy of the index.'],
-    ['/sources', 'The index starts with declared access.'],
-    ['/setup', 'See exactly what Homedex reads.']
+    ['/ports', 'Ports'],
+    ['/expiry', 'Expiry'],
+    ['/changes', 'Changes'],
+    ['/copy-my-lab', 'Copy my lab'],
+    ['/sources', 'Sources'],
+    ['/setup', 'First source']
   ] as const;
 
   for (const [path, heading] of screens) {

@@ -9,9 +9,9 @@ describe('final Homedex registers', () => {
   it('renders the editorial service index instead of dashboard cards', () => {
     const inventory = createDemoInventory();
     render(Pages, { props: { path: '/', inventory } });
-    expect(screen.getByRole('heading', { name: 'Everything, in its place.' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Services/ })).toBeInTheDocument();
     expect(screen.getByText('immich-server')).toBeInTheDocument();
-    expect(screen.getByText('VIRTUAL WINDOW · 11 RECORDS RENDERED')).toBeInTheDocument();
+    expect(screen.getByText('11 of 11 records')).toBeInTheDocument();
   });
 
   it('separates a broken route join from its provenance evidence', () => {

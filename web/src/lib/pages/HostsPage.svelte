@@ -13,6 +13,7 @@
   }));
   let selectedID = $derived(Number(path.split('?')[0].match(/^\/hosts\/(\d+)/)?.[1] ?? 0));
   let selectedHost = $derived(hosts.find((host) => host.id === selectedID));
+  let serviceTotal = $derived(inventory.services.length);
 
   function countServices(name: string) { return inventory.services.filter((service) => service.host === name).length; }
   function countPorts(name: string) { return inventory.ports.filter((port) => port.host === name).length; }
@@ -20,7 +21,7 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="INDEX · HOSTS" title="Where the address book lives." copy={`${hosts.length} observed Docker hosts, presented as source records rather than monitoring nodes.`}>
+  <PageHead kicker="Index · Hosts" title="Hosts" meta={`${hosts.length} hosts · ${serviceTotal} services`}>
     {#snippet actions()}{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/sources')}>Manage sources</button>{/if}{/snippet}
   </PageHead>
   {#if hosts.length}

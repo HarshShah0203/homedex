@@ -2,6 +2,7 @@
   import { deleteConnector, scanConnector, testSavedConnector, updateConnector, type Inventory } from '../api';
   import PageHead from '../PageHead.svelte';
   import { navigate } from '../router';
+  import { relativeTime } from '../time';
 
   let { inventory, onrefresh = async () => {} }: { inventory: Inventory; onrefresh?: () => Promise<void> } = $props();
   let pending = $state<Record<number, string>>({});
@@ -9,6 +10,14 @@
   let editingID = $state<number | null>(null);
   let editName = $state('');
   let editSchedule = $state(15);
+  let confirmingID = $state<number | null>(null);
+  let confirmTimer = 0;
+
+  function armDelete(id: number) {
+    confirmingID = id;
+    window.clearTimeout(confirmTimer);
+    confirmTimer = window.setTimeout(() => (confirmingID = null), 4000);
+  }
 
   function connectorTone(connector: Inventory['connectors'][number]) {
     return ['connected', 'ok', 'success'].includes(connector.last_status.toLowerCase()) ? 'ok' : 'bad';
@@ -79,7 +88,13 @@
   }
 
   async function removeSource(connector: Inventory['connectors'][number]) {
-    if (!window.confirm(`Delete “${connector.name}”? Inventory history remains, but this source will stop scanning.`)) return;
+    if (confirmingID !== connector.id) {
+      armDelete(connector.id);
+      setNotice(connector.id, 'bad', 'Inventory history remains, but this source stops scanning. Confirm to delete.');
+      return;
+    }
+    window.clearTimeout(confirmTimer);
+    confirmingID = null;
     await run(connector.id, 'Deleting', async () => {
       await deleteConnector(connector.id);
       return 'Source deleted.';
@@ -88,7 +103,7 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="SOURCES · SETTINGS" title="The index starts with declared access." copy="Every connector records its endpoint, read scope, last result, and schedule. There are no agents.">
+  <PageHead kicker="Sources · Connectors" title="Sources" meta={`${inventory.connectors.length} configured`}>
     {#snippet actions()}{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/setup')}>Add source</button>{/if}{/snippet}
   </PageHead>
   <section class="settings-layout">
@@ -99,14 +114,14 @@
         {#if inventory.connectors.length}
           {#each inventory.connectors as connector}
             <div class="source-record">
-              <div class="register-row source-cols"><div data-label="Source"><strong>{connector.name}</strong><small>SRC-{String(connector.id).padStart(3, '0')}</small></div><div data-label="Endpoint"><code>{connector.endpoint || 'Stored in connector configuration'}</code></div><div data-label="State"><span class={`status ${connectorTone(connector)}`}>{connector.enabled ? stateLabel(connector) : 'Disabled'}</span></div><div data-label="Indexed"><strong>{connector.found || 'Inventory count unavailable'}</strong><small>updated {connector.updated_at || 'time unavailable'}</small></div><div data-label="Schedule"><span class="mono">{connector.schedule_minutes} min</span></div></div>
+              <div class="register-row source-cols"><div data-label="Source"><strong>{connector.name}</strong><small>SRC-{String(connector.id).padStart(3, '0')}</small></div><div data-label="Endpoint"><code>{connector.endpoint || 'Stored in connector configuration'}</code></div><div data-label="State"><span class={`status ${connectorTone(connector)}`}>{connector.enabled ? stateLabel(connector) : 'Disabled'}</span></div><div data-label="Indexed"><strong>{connector.found || 'Inventory count unavailable'}</strong><small>updated {connector.updated_at ? relativeTime(connector.updated_at) : 'never'}</small></div><div data-label="Schedule"><span class="mono">{connector.schedule_minutes} min</span></div></div>
               {#if !inventory.readOnly}
                 <div class="source-actions" aria-label={`Actions for ${connector.name}`}>
                   <button class="quiet-button" disabled={Boolean(pending[connector.id])} onclick={() => testSource(connector.id)}>Test</button>
                   <button class="quiet-button" disabled={Boolean(pending[connector.id]) || !connector.enabled} onclick={() => scanSource(connector.id)}>Scan now</button>
                   <button class="quiet-button" disabled={Boolean(pending[connector.id])} onclick={() => toggleSource(connector)}>{connector.enabled ? 'Disable' : 'Enable'}</button>
                   <button class="quiet-button" disabled={Boolean(pending[connector.id])} onclick={() => startEdit(connector)}>Edit</button>
-                  <button class="quiet-button" disabled={Boolean(pending[connector.id])} onclick={() => removeSource(connector)}>Delete</button>
+                  <button class={confirmingID === connector.id ? 'danger-button' : 'quiet-button'} disabled={Boolean(pending[connector.id])} onclick={() => removeSource(connector)}>{confirmingID === connector.id ? 'Confirm delete' : 'Delete'}</button>
                   {#if notices[connector.id]}<span class={`status ${notices[connector.id].tone}`} role="status">{notices[connector.id].text}</span>{/if}
                 </div>
                 {#if editingID === connector.id}
@@ -125,6 +140,6 @@
         {/if}
       </section>
     </div>
-    <aside class="source-contract" data-component-id="source-access-contract"><div class="section-label">Standing access contract</div><h2>Read-only, by construction.</h2><p>The contract applies to every source. Homedex records inventory facts and exposes no connected-system write operations.</p><div class="contract-line"><b>✓</b><div><strong>Identity, state, network, and port facts</strong><small>Read and stored as versioned inventory records.</small></div></div><div class="contract-line deny"><b>×</b><div><strong><code>Config.Env</code></strong><small>Never requested, read, or stored.</small></div></div><div class="contract-line deny"><b>×</b><div><strong>Start, stop, deploy, edit, or delete</strong><small>No endpoints exist for these operations.</small></div></div><div class="contract-line deny"><b>×</b><div><strong>Agents and telemetry</strong><small>No host agent or time-series collector is installed.</small></div></div></aside>
+    <aside class="source-contract" data-component-id="source-access-contract"><div class="section-label">Access contract</div><h2>Read-only, by construction.</h2><p>Applies to every source.</p><div class="contract-line"><b>✓</b><div><strong>Identity, state, network, and port facts</strong><small>Read and stored as versioned inventory records.</small></div></div><div class="contract-line deny"><b>×</b><div><strong><code>Config.Env</code></strong><small>Never requested, read, or stored.</small></div></div><div class="contract-line deny"><b>×</b><div><strong>Start, stop, deploy, edit, or delete</strong><small>No endpoints exist for these operations.</small></div></div><div class="contract-line deny"><b>×</b><div><strong>Agents and telemetry</strong><small>No host agent or time-series collector is installed.</small></div></div></aside>
   </section>
 </main>

@@ -7,6 +7,7 @@
   import CommandPalette from './lib/CommandPalette.svelte';
   import { createEmptyInventory, getSetupStatus, loadInventory, type Inventory } from './lib/api';
   import { navigate, route } from './lib/router';
+  import { relativeTime } from './lib/time';
 
   let inventory = $state<Inventory>(createEmptyInventory());
   let loading = $state(true);
@@ -15,6 +16,13 @@
   let authRequired = $state(false);
   let needsAdmin = $state(false);
   let pathname = $derived($route.split('?')[0]);
+  let lastScan = $derived.by(() => {
+    const stamps = inventory.connectors.map((connector) => connector.updated_at).filter(Boolean) as string[];
+    if (!stamps.length) return '';
+    const latest = stamps.reduce((max, value) => (value > max ? value : max));
+    const label = relativeTime(latest);
+    return label === latest ? '' : label;
+  });
 
   async function refresh() {
     loading = true;
@@ -56,7 +64,7 @@
 {:else if authRequired}
   <Login onlogin={refresh} />
 {:else}
-  <Shell path={$route} bind:paletteOpen bind:theme>
+  <Shell path={$route} bind:paletteOpen bind:theme {lastScan}>
     {#if loading}
       <main class="page loading-page" aria-label="Loading inventory">
         <div class="loading-rule"></div>

@@ -2,6 +2,7 @@
   import type { Inventory } from '../api';
   import PageHead from '../PageHead.svelte';
   import { navigate } from '../router';
+  import { relativeTime } from '../time';
 
   let { inventory }: { inventory: Inventory } = $props();
   let query = $state('');
@@ -25,7 +26,7 @@
 </script>
 
 <main class="page">
-  <PageHead kicker="INDEX · SERVICES" title="Everything, in its place." copy={`${recordTotal} service records across ${inventory.hosts.length} hosts. Observation state is kept separate from reachability or health.`}>
+  <PageHead kicker="Index · Services" title="Services" meta={`${recordTotal} records · ${inventory.hosts.length} hosts`}>
     {#snippet actions()}<button class="quiet-button" onclick={() => navigate('/hosts')}>View hosts</button><button class="primary-button" onclick={() => navigate('/copy-my-lab')}>Copy my lab</button>{/snippet}
   </PageHead>
   <nav class="action-ledger" data-component-id="index-action-ledger" aria-label="Review queue">
@@ -44,16 +45,16 @@
       <div class="virtual-window" aria-label="Virtualized service window">
         {#each visible as service, index}
           <article class:selected={index === 0} class="service-row" data-component-id={`service-row-${service.name}`}>
-            <div class="service-name" data-label="Service + stack + record ID"><i class={`dot ${stateClass(service.state)}`}></i><span><strong>{service.name}</strong><small>{service.stack} · SRV-{String(service.id).padStart(3, '0')} · {observedLabel(service.state)}</small></span></div>
+            <div class="service-name" data-label="Service + stack + record ID"><i class={`dot ${stateClass(service.state)}`} title={observedLabel(service.state)}></i><span><strong>{service.name}</strong><small>{service.stack} · SRV-{String(service.id).padStart(3, '0')}</small></span></div>
             <div class="cell mono" data-label="Image : tag">{service.image}<small>{service.tag}</small></div>
             <div class="cell" data-label="Route / address"><span class:route-link={service.route && service.route !== '—'}>{service.route && service.route !== '—' ? service.route : 'No public route'}</span><small>{service.host}:{service.ports.split(' ')[0]}</small></div>
-            <div class="cell" data-label="Host">{service.host}<small>Docker</small></div>
-            <div class="cell mono" data-label="Port facts">{service.ports}<small>allocated</small></div>
-            <div class="cell mono" data-label="Seen">{service.last_seen.replace(' ago', '')}<small>ago</small></div>
+            <div class="cell" data-label="Host">{service.host}</div>
+            <div class="cell mono" data-label="Port facts">{service.ports}</div>
+            <div class="cell mono" data-label="Seen">{relativeTime(service.last_seen)}</div>
           </article>
         {/each}
       </div>
-      <footer class="table-footer"><span>ROWS 1–{visible.length} OF {recordTotal} · ESTIMATED ROW HEIGHT 60PX</span><span>VIRTUAL WINDOW · {visible.length} RECORDS RENDERED</span></footer>
+      <footer class="table-footer"><span>{visible.length} of {recordTotal} records</span><span>{unresolvedRoutes.length} unresolved routes</span></footer>
     {:else}
       <div class="empty-register"><strong>{inventory.services.length ? 'NO MATCHING RECORDS' : 'NO SERVICES INDEXED'}</strong><span>{inventory.services.length ? `No service contains “${query}”.` : inventory.readOnly ? 'This shared inventory contains no service records.' : 'Add a read-only source, then run the first scan.'}</span>{#if !inventory.services.length && !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/setup')}>Add a source</button>{/if}</div>
     {/if}
