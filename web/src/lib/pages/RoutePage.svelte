@@ -2,7 +2,7 @@
   import type { Inventory, Route } from '../types';
   import PageHead from '../PageHead.svelte';
   import { navigate } from '../router';
-  import { formatDate } from '../time';
+  import { formatDate, plural } from '../time';
 
   let { path, inventory }: { path: string; inventory: Inventory } = $props();
   let routeID = $derived(routeRecordID(path));
@@ -104,7 +104,7 @@
 
 {#if routeID === 0}
   <main class="page">
-    <PageHead title="Routes" meta={`${inventory.routes.length} routes${brokenCount ? ` · ${brokenCount} broken` : ''}`} />
+    <PageHead title="Routes" meta={`${plural(inventory.routes.length, 'route')}${brokenCount ? ` · ${brokenCount} broken` : ''}`} />
     {#if inventory.routes.length}
       <div class="toolbar"><input class="inline-search" bind:value={filter} aria-label="Filter routes" placeholder="Find domain, proxy, target, or service" /><span class="spacer"></span><span class="toolbar-meta">{visibleRoutes.length} VISIBLE · {inventory.routes.length} TOTAL</span></div>
       <section class="register" data-component-id="route-register">

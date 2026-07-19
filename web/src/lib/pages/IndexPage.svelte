@@ -2,7 +2,7 @@
   import type { Inventory } from '../api';
   import PageHead from '../PageHead.svelte';
   import { navigate } from '../router';
-  import { relativeTime } from '../time';
+  import { plural, relativeTime } from '../time';
 
   let { inventory }: { inventory: Inventory } = $props();
   let query = $state('');
@@ -45,7 +45,7 @@
 </script>
 
 <main class="page">
-  <PageHead title="Services" meta={`${recordTotal} records · ${inventory.hosts.length} hosts`}>
+  <PageHead title="Services" meta={`${plural(recordTotal, 'record')} · ${plural(inventory.hosts.length, 'host')}`}>
     {#snippet actions()}<button class="quiet-button" onclick={() => navigate('/hosts')}>View hosts</button><button class="primary-button" onclick={() => navigate('/copy-my-lab')}>Copy my lab</button>{/snippet}
   </PageHead>
   <nav class="action-ledger" data-component-id="index-action-ledger" aria-label="Review queue">

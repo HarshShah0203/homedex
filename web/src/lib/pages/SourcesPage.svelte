@@ -23,6 +23,10 @@
     return ['connected', 'ok', 'success'].includes(connector.last_status.toLowerCase()) ? 'ok' : 'bad';
   }
 
+  function scheduleLabel(minutes: number) {
+    return minutes % 60 === 0 && minutes >= 60 ? `${minutes / 60}h` : `${minutes} min`;
+  }
+
   function stateLabel(connector: Inventory['connectors'][number]) {
     return connectorTone(connector) === 'ok' ? 'Connected' : connector.last_error?.split(':')[0] || 'Connection refused';
   }
@@ -108,13 +112,13 @@
   </PageHead>
   <section class="settings-layout">
     <div class="sources-register">
-      <div class="toolbar sources-toolbar"><span class="toolbar-meta">{inventory.connectors.length} SOURCES · {inventory.connectors.filter((connector) => connectorTone(connector) === 'ok').length} CONNECTED</span></div>
+      <div class="toolbar sources-toolbar"><span class="toolbar-meta">{inventory.connectors.length} SOURCES · {inventory.connectors.filter((connector) => connector.enabled && connectorTone(connector) === 'ok').length} CONNECTED</span></div>
       <section class="register" data-component-id="source-register">
         <header class="register-head source-cols"><span>Source</span><span>Endpoint</span><span>State</span><span>Indexed</span><span>Schedule</span></header>
         {#if inventory.connectors.length}
           {#each inventory.connectors as connector}
             <div class="source-record">
-              <div class="register-row source-cols"><div data-label="Source"><strong>{connector.name}</strong><small>SRC-{String(connector.id).padStart(3, '0')}</small></div><div data-label="Endpoint"><code>{connector.endpoint || 'Stored in connector configuration'}</code></div><div data-label="State"><span class={`status ${connectorTone(connector)}`}>{connector.enabled ? stateLabel(connector) : 'Disabled'}</span></div><div data-label="Indexed"><strong>{connector.found || 'Inventory count unavailable'}</strong><small>updated {connector.updated_at ? relativeTime(connector.updated_at) : 'never'}</small></div><div data-label="Schedule"><span class="mono">{connector.schedule_minutes} min</span></div></div>
+              <div class="register-row source-cols"><div data-label="Source"><strong>{connector.name}</strong><small>SRC-{String(connector.id).padStart(3, '0')}</small></div><div data-label="Endpoint"><code>{connector.endpoint || 'Stored in connector configuration'}</code></div><div data-label="State"><span class={`status ${connector.enabled ? connectorTone(connector) : 'idle'}`}>{connector.enabled ? stateLabel(connector) : 'Disabled'}</span></div><div data-label="Indexed"><strong>{connector.found || '—'}</strong><small>updated {connector.updated_at ? relativeTime(connector.updated_at) : 'never'}</small></div><div class="num" data-label="Schedule"><span class="mono">{scheduleLabel(connector.schedule_minutes)}</span></div></div>
               {#if !inventory.readOnly}
                 <div class="source-actions" aria-label={`Actions for ${connector.name}`}>
                   <button class="quiet-button" disabled={Boolean(pending[connector.id])} onclick={() => testSource(connector.id)}>Test</button>

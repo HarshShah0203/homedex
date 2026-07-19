@@ -36,6 +36,10 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   return shortDate(date, now);
 }
 
+export function plural(count: number, word: string): string {
+  return `${count} ${count === 1 ? word : `${word}s`}`;
+}
+
 export function formatDate(iso: string): string {
   const date = parse(iso);
   if (!date) return iso;
