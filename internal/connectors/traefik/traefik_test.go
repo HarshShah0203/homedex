@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,12 @@ func TestScanRecordedMultiHostRouter(t *testing.T) {
 	}
 	immich := 0
 	for _, r := range snap.Routes {
+		// The natural key must be stable across container recreates: it must
+		// not embed the (volatile) upstream host/IP. files.example.com's
+		// upstream is 10.0.0.5, immich's is immich-server — neither may leak.
+		if strings.Contains(r.Key, r.UpstreamHost) {
+			t.Fatalf("route key %q leaks upstream host %q", r.Key, r.UpstreamHost)
+		}
 		switch r.Domain {
 		case "photos.example.com", "gallery.example.com":
 			// The router references service "immich" while the API names it

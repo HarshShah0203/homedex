@@ -12,6 +12,7 @@
   let loadingNextPort = $state(false);
   let conflicts = $state<PortConflict[]>([]);
   let conflictError = $state('');
+  let nextPortToken = 0;
   let rows = $derived([...inventory.ports]
     .filter((port) => (!selectedHostID || port.host_id === selectedHostID) && `${port.number} ${port.protocol} ${port.service} ${port.host}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => a.number - b.number || (a.host ?? '').localeCompare(b.host ?? '')));
@@ -33,19 +34,26 @@
 
   $effect(() => {
     const hostID = selectedHostID;
-    if (hostID) void findNextPort(hostID);
+    // Guard on null/undefined, not truthiness, so a real host with id 0 is looked up.
+    if (hostID != null) void findNextPort(hostID);
   });
 
   async function findNextPort(hostID: number) {
+    // Sequence overlapping lookups: a slow response for host A must not overwrite
+    // a newer response for host B (which would make "Copy port" copy the wrong host's port).
+    const token = ++nextPortToken;
     loadingNextPort = true;
     nextPort = null;
     nextPortError = '';
     try {
-      nextPort = await loadNextFreePort(hostID);
+      const port = await loadNextFreePort(hostID);
+      if (token !== nextPortToken) return;
+      nextPort = port;
     } catch (cause) {
+      if (token !== nextPortToken) return;
       nextPortError = cause instanceof Error ? cause.message : 'The next-free port could not be checked.';
     } finally {
-      loadingNextPort = false;
+      if (token === nextPortToken) loadingNextPort = false;
     }
   }
 

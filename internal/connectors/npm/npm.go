@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/HarshShah0203/homedex/internal/connectors"
 	"github.com/HarshShah0203/homedex/internal/domain"
@@ -19,7 +20,9 @@ type Connector struct {
 	tokens map[string]string
 }
 
-func New() *Connector           { return &Connector{Client: http.DefaultClient, tokens: map[string]string{}} }
+func New() *Connector {
+	return &Connector{Client: connectors.Client(connectors.DefaultTimeout), tokens: map[string]string{}}
+}
 func (*Connector) Kind() string { return "npm" }
 
 type config struct {
@@ -34,6 +37,28 @@ func decode(raw connectors.Config) (config, error) {
 		e = fmt.Errorf("url, email, and password are required")
 	}
 	return x, e
+}
+
+// certExpiryLayouts are tried in order against a certificate's expires_on
+// value. NPM's API returns a space-separated timestamp ("2025-08-01 00:00:00"),
+// not RFC3339, so a single RFC3339 parse silently failed and every NPM-managed
+// certificate's not_after was stored as the zero time.
+var certExpiryLayouts = []string{
+	time.RFC3339,
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04:05",
+	"2006-01-02",
+}
+
+// parseExpiry returns the first layout that parses s, or the zero time if none
+// match (callers leave not_after unset rather than crashing).
+func parseExpiry(s string) time.Time {
+	for _, layout := range certExpiryLayouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 func (c *Connector) token(ctx context.Context, x config) (string, error) {
 	key := strings.TrimRight(x.URL, "/") + "|" + x.Email
@@ -72,27 +97,22 @@ func (c *Connector) get(ctx context.Context, x config, tok, path string, out any
 	return c.getAttempt(ctx, x, tok, path, out, true)
 }
 func (c *Connector) getAttempt(ctx context.Context, x config, tok, path string, out any, retry bool) error {
-	req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(x.URL, "/")+path, nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	res, e := c.Client.Do(req)
-	if e != nil {
-		return e
-	}
-	defer res.Body.Close()
-	if res.StatusCode == http.StatusUnauthorized && retry {
-		c.mu.Lock()
-		delete(c.tokens, strings.TrimRight(x.URL, "/")+"|"+x.Email)
-		c.mu.Unlock()
-		fresh, err := c.token(ctx, x)
-		if err != nil {
-			return err
+	e := connectors.GetJSON(ctx, c.Client, strings.TrimRight(x.URL, "/")+path, out,
+		connectors.WithLabel("NPM"), connectors.WithBearerToken(tok))
+	if retry {
+		var se *connectors.StatusError
+		if errors.As(e, &se) && se.StatusCode == http.StatusUnauthorized {
+			c.mu.Lock()
+			delete(c.tokens, strings.TrimRight(x.URL, "/")+"|"+x.Email)
+			c.mu.Unlock()
+			fresh, err := c.token(ctx, x)
+			if err != nil {
+				return err
+			}
+			return c.getAttempt(ctx, x, fresh, path, out, false)
 		}
-		return c.getAttempt(ctx, x, fresh, path, out, false)
 	}
-	if res.StatusCode/100 != 2 {
-		return fmt.Errorf("NPM API returned %s", res.Status)
-	}
-	return json.NewDecoder(res.Body).Decode(out)
+	return e
 }
 func (c *Connector) Validate(ctx context.Context, raw connectors.Config) error {
 	x, e := decode(raw)
@@ -149,7 +169,7 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 		}
 	}
 	for _, z := range cs {
-		t, _ := time.Parse(time.RFC3339, z.ExpiresOn)
+		t := parseExpiry(z.ExpiresOn)
 		for _, d := range z.DomainNames {
 			endpoint := d + ":443"
 			s.Certs = append(s.Certs, domain.Cert{Key: "tls:" + endpoint, Subject: d, SANs: z.DomainNames, NotAfter: t, Source: "proxy", Endpoint: endpoint})
