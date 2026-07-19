@@ -13,6 +13,12 @@ Point Homedex at Docker and a supported reverse proxy to build a searchable reco
 
 Homedex is **the ledger, not the map**: it answers “what runs where?” from observed infrastructure instead of asking you to maintain another spreadsheet. It does not start, stop, or reconfigure containers.
 
+![The Homedex services ledger — every service, image, route, host, and port, discovered from Docker and your reverse proxy](docs/screenshots/services.png)
+
+| Routes: domain → proxy → container, broken chains flagged | Expiry: certs and domains by days remaining |
+|---|---|
+| ![Routes register](docs/screenshots/routes.png) | ![Expiry register](docs/screenshots/expiry.png) |
+
 > **v0.1 status:** the discovery engine, authenticated API, scheduled reconciliation, change feed, route resolution, TLS/RDAP connectors, exports, read-only shares, notifications, manual records/metadata, setup wizard, and embedded Svelte inventory UI are implemented and wired end to end.
 
 ## Quickstart
