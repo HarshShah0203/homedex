@@ -6,14 +6,13 @@
   import { buildSearchGroups, type SearchResult } from './search';
 
   let { open = $bindable(false), inventory }: { open: boolean; inventory: Inventory } = $props();
-  let query = $state('immich');
+  let query = $state('');
   let input = $state<HTMLInputElement>();
   let groups = $derived(buildSearchGroups(inventory, query));
   let resultCount = $derived(groups.reduce((total, group) => total + group.results.length, 0));
 
   $effect(() => {
     if (open) {
-      if (!query) query = 'immich';
       tick().then(() => input?.focus());
     }
   });
@@ -41,7 +40,7 @@
         <input bind:this={input} bind:value={query} aria-label="Search query" autocomplete="off" placeholder="Search records" />
         <button class="search-close" aria-label="Close search" onclick={() => (open = false)}><X size={16} /><span>ESC</span></button>
       </label>
-      <div class="search-summary"><strong>{resultCount} result{resultCount === 1 ? '' : 's'}</strong> across the current index · exact and connected-record matches</div>
+      {#if query}<div class="search-summary"><strong>{resultCount} result{resultCount === 1 ? '' : 's'}</strong> across the current index · exact and connected-record matches</div>{/if}
       {#if groups.length}
         {#each groups as group}
           <section class="search-group">
@@ -57,8 +56,10 @@
             </div>
           </section>
         {/each}
-      {:else}
+      {:else if query}
         <div class="empty-register compact"><strong>No records match “{query}”.</strong><span>Try a service, route, port, or host name.</span></div>
+      {:else}
+        <div class="empty-register compact"><strong>Search the whole ledger.</strong><span>Services, routes, ports, hosts, and certificates — with connected records.</span></div>
       {/if}
       <footer class="search-footer"><span>↑ ↓ SELECT</span><span>↵ OPEN</span><span>⌘ ↵ OPEN INSPECTOR</span></footer>
     </div>

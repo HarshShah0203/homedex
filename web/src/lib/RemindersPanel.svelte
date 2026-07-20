@@ -173,9 +173,11 @@
         {#if kind === 'expiry'}<label>Days before <input type="number" min="1" bind:value={days} /></label>{/if}
         {#if kind === 'change'}<label>Change kinds <input type="text" placeholder="added, removed, modified" bind:value={changeKinds} /></label>{/if}
         <label>Shoutrrr URL <input type="text" placeholder="ntfy://ntfy.sh/my-lab" bind:value={url} /></label>
-        <button class="primary-button" disabled={adding}>Add reminder</button>
-        <button type="button" class="quiet-button" disabled={adding} onclick={() => { showAdd = false; addError = ''; }}>Cancel</button>
-        {#if addError}<span class="status bad" role="alert">{addError}</span>{/if}
+        <div class="form-actions">
+          <button class="primary-button" disabled={adding}>Add reminder</button>
+          <button type="button" class="quiet-button" disabled={adding} onclick={() => { showAdd = false; addError = ''; }}>Cancel</button>
+          {#if addError}<span class="status bad" role="alert">{addError}</span>{/if}
+        </div>
       </form>
     {:else}
       <div class="register-row"><div><button class="quiet-button" onclick={() => (showAdd = true)}>Add reminder</button></div></div>
