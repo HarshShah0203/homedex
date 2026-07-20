@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createShare, loadShares, revokeShare } from './api';
+  import { copyText } from './clipboard';
   import { formatDate, relativeTime } from './time';
   import type { Share } from './types';
 
@@ -73,7 +74,7 @@
 
   async function copyLink() {
     if (!created) return;
-    await navigator.clipboard?.writeText(shareURL(created));
+    await copyText(shareURL(created));
     copied = true;
     window.setTimeout(() => (copied = false), 1800);
   }
@@ -136,10 +137,14 @@
         <div class="register-row reminder-row">
           <div>
             <strong>{share.name}</strong>
-            <small>created {relativeTime(share.created_at)} · expires {share.expires_at ? formatDate(share.expires_at) : 'no expiry'}</small>
+            <small>created {relativeTime(share.created_at)} · {share.expires_at ? `expires ${formatDate(share.expires_at)}` : 'no expiry'}</small>
           </div>
           <div class="source-editor">
-            <button class={confirmingID === share.id ? 'danger-button' : 'quiet-button'} disabled={Boolean(pending[share.id])} onclick={() => revoke(share)}>{confirmingID === share.id ? 'Confirm revoke' : 'Revoke'}</button>
+            {#if share.active}
+              <button class={confirmingID === share.id ? 'danger-button' : 'quiet-button'} disabled={Boolean(pending[share.id])} onclick={() => revoke(share)}>{confirmingID === share.id ? 'Confirm revoke' : 'Revoke'}</button>
+            {:else}
+              <span class="status idle">Revoked</span>
+            {/if}
           </div>
         </div>
       {/each}
