@@ -67,7 +67,7 @@ describe('final Homedex registers', () => {
     const inventory = createDemoInventory();
     inventory.connectors = [{ ...inventory.connectors[0], last_status: 'success' }];
     render(Pages, { props: { path: '/sources', inventory } });
-    expect(screen.getByText('1 SOURCES · 1 CONNECTED')).toBeInTheDocument();
+    expect(screen.getByText('1 SOURCE · 1 CONNECTED')).toBeInTheDocument();
     expect(screen.getByText('Connected')).toBeInTheDocument();
   });
 });

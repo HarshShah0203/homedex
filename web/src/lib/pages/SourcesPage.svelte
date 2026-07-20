@@ -261,7 +261,7 @@
   </PageHead>
   <section class="settings-layout">
     <div class="sources-register">
-      <div class="toolbar sources-toolbar"><span class="toolbar-meta">{inventory.connectors.length} SOURCES · {inventory.connectors.filter((connector) => connector.enabled && connectorTone(connector) === 'ok').length} CONNECTED</span></div>
+      <div class="toolbar sources-toolbar"><span class="toolbar-meta">{inventory.connectors.length} {inventory.connectors.length === 1 ? 'SOURCE' : 'SOURCES'} · {inventory.connectors.filter((connector) => connector.enabled && connectorTone(connector) === 'ok').length} CONNECTED</span></div>
       {#if addNotice}<span class={`status ${addNotice.tone}`} role="status">{addNotice.text}</span>{/if}
       {#if !inventory.readOnly && adding}
         <form class="source-editor" data-component-id="add-source-form" onsubmit={(event) => { event.preventDefault(); saveAdd(); }}>
@@ -293,7 +293,7 @@
             <label class="field-label">Domains, one per line <textarea bind:value={fDomains} rows="3" placeholder="example.com"></textarea></label>
           {/if}
           <label class="field-label">Schedule, minutes <input type="number" min="1" bind:value={addSchedule} /></label>
-          <div class="register-row">
+          <div class="form-actions">
             <button type="button" class="quiet-button" disabled={addBusy} onclick={testAdd}>{addVerified ? 'Connection verified' : 'Test connection'}</button>
             <button class="primary-button" disabled={addBusy || !addVerified}>Save and scan</button>
             <button type="button" class="quiet-button" disabled={addBusy} onclick={cancelAdd}>Cancel</button>
@@ -321,8 +321,10 @@
                   <form class="source-editor" onsubmit={(event) => { event.preventDefault(); saveEdit(connector.id); }}>
                     <label>Source name <input bind:value={editName} /></label>
                     <label>Schedule, minutes <input type="number" min="1" bind:value={editSchedule} /></label>
-                    <button class="primary-button" disabled={Boolean(pending[connector.id])}>Save</button>
-                    <button type="button" class="quiet-button" onclick={() => (editingID = null)}>Cancel</button>
+                    <div class="form-actions">
+                      <button class="primary-button" disabled={Boolean(pending[connector.id])}>Save</button>
+                      <button type="button" class="quiet-button" onclick={() => (editingID = null)}>Cancel</button>
+                    </div>
                   </form>
                 {/if}
               {/if}

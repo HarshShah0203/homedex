@@ -150,9 +150,11 @@
       <form class="source-editor" onsubmit={submitCreate}>
         <label>Name <input type="text" bind:value={name} /></label>
         <label>Expires in hours <input type="number" min="1" placeholder="168" bind:value={expiresIn} /></label>
-        <button class="primary-button" disabled={creating}>Create share</button>
-        <button type="button" class="quiet-button" disabled={creating} onclick={() => { showCreate = false; createError = ''; }}>Cancel</button>
-        {#if createError}<span class="status bad" role="alert">{createError}</span>{/if}
+        <div class="form-actions">
+          <button class="primary-button" disabled={creating}>Create share</button>
+          <button type="button" class="quiet-button" disabled={creating} onclick={() => { showCreate = false; createError = ''; }}>Cancel</button>
+          {#if createError}<span class="status bad" role="alert">{createError}</span>{/if}
+        </div>
       </form>
     {:else}
       <div class="register-row"><div><button class="quiet-button" onclick={() => (showCreate = true)}>Create share</button></div></div>
