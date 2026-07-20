@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { copyText } from '../clipboard';
   import { contextLimit, downloadExport, loadContextExport } from '../api';
   import type { ContextExport } from '../types';
   import PageHead from '../PageHead.svelte';
@@ -32,7 +33,7 @@
 
   async function copyMarkdown() {
     if (!context) return;
-    await navigator.clipboard?.writeText(context.markdown);
+    await copyText(context.markdown);
     copied = true;
     window.setTimeout(() => (copied = false), 1800);
   }

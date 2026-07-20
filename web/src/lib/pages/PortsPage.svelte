@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { copyText } from '../clipboard';
   import { loadNextFreePort, loadPortConflicts, type Inventory } from '../api';
   import type { Port, PortConflict } from '../types';
   import PageHead from '../PageHead.svelte';
@@ -57,15 +58,19 @@
     }
   }
 
+  let portCopied = $state(false);
   async function copyPort() {
-    if (nextPort !== null) await navigator.clipboard?.writeText(String(nextPort));
+    if (nextPort === null) return;
+    await copyText(String(nextPort));
+    portCopied = true;
+    window.setTimeout(() => (portCopied = false), 1800);
   }
 </script>
 
 <main class="page">
   <PageHead title="Ports" meta={`${total} declarations${conflicts.length ? ` · ${conflicts.length} conflicts` : ''}`} />
   {#if conflictError}<div class="summary-line" role="alert"><strong>Port conflicts unavailable</strong><span>{conflictError}</span><button class="quiet-button" onclick={() => (conflictError = '')}>Dismiss</button></div>{/if}
-  {#if inventory.hosts.length}<section class="next-port" data-component-id="next-free-port"><span class="number">{loadingNextPort ? '…' : nextPort ?? '—'}</span><div><strong>Next unused TCP port</strong><small>{nextPortError || `checked for ${selectedHost?.name || 'selected host'} from 1024`}</small></div><button class="primary-button" disabled={nextPort === null} onclick={copyPort}>Copy {nextPort ?? 'port'}</button></section>{/if}
+  {#if inventory.hosts.length}<section class="next-port" data-component-id="next-free-port"><span class="number">{loadingNextPort ? '…' : nextPort ?? '—'}</span><div><strong>Next unused TCP port</strong><small>{nextPortError || `checked for ${selectedHost?.name || 'selected host'} from 1024`}</small></div><button class="primary-button" disabled={nextPort === null} onclick={copyPort}>{portCopied ? 'Copied' : `Copy ${nextPort ?? 'port'}`}</button></section>{/if}
   <div class="toolbar"><input class="inline-search" bind:value={query} aria-label="Filter ports" placeholder="Find port, service, or host" />{#if inventory.hosts.length}<label class="field-label" for="port-host">Host</label><select id="port-host" bind:value={selectedHostID} aria-label="Select host for port lookup">{#each inventory.hosts as host}<option value={host.id}>{host.name}</option>{/each}</select>{/if}<span class="spacer"></span><span class="toolbar-meta">{rows.length} VISIBLE · {total} DECLARATIONS</span></div>
   <section class="register" data-component-id="port-allocation-register">
     <header class="register-head port-cols"><span class="num">Port</span><span>Proto</span><span>Service</span><span>Host</span><span>Binding</span><span>Scope</span></header>

@@ -74,7 +74,7 @@
         {#if readOnly}
           <p class="inspector-copy">{notesDraft || 'No notes recorded.'}</p>
         {:else}
-          <textarea class="inline-search" aria-label="Host notes" rows="5" bind:value={notesDraft} disabled={notesStatus === 'saving'} placeholder="Record private notes for this host."></textarea>
+          <textarea class="note-entry" aria-label="Host notes" rows="5" bind:value={notesDraft} disabled={notesStatus === 'saving'} placeholder="Record private notes for this host."></textarea>
           <div class="source-editor">
             <button class="primary-button" disabled={notesStatus === 'saving'} onclick={saveNotes}>{notesStatus === 'saving' ? 'Saving…' : 'Save notes'}</button>
             {#if notesStatus === 'saved'}<span class="status ok" role="status">Notes saved.</span>{/if}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Inventory, Route } from '../types';
+  import { copyText } from '../clipboard';
   import PageHead from '../PageHead.svelte';
   import { navigate } from '../router';
   import { formatDate, plural } from '../time';
@@ -97,8 +98,11 @@
       : ['Confirm target host still exists', `Check ${item.proxy || 'proxy'} source record`, 'Renew or remove stale TLS'];
   }
 
+  let evidenceCopied = $state(false);
   async function copyEvidence() {
-    await navigator.clipboard?.writeText(facts.map((fact) => `${fact[0]}: ${fact[1]} [${fact[2]}]`).join('\n'));
+    await copyText(facts.map((fact) => `${fact[0]}: ${fact[1]} [${fact[2]}]`).join('\n'));
+    evidenceCopied = true;
+    window.setTimeout(() => (evidenceCopied = false), 1800);
   }
 </script>
 
@@ -130,7 +134,7 @@
 {:else if route}
   <main class="page">
     <PageHead kicker="Routes · Record detail" title={route.domain}>
-      {#snippet actions()}<button class="quiet-button" onclick={() => navigate('/routes')}>All routes</button><button class="quiet-button" onclick={copyEvidence}>Copy evidence</button>{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/sources')}>Source record</button>{/if}{/snippet}
+      {#snippet actions()}<button class="quiet-button" onclick={() => navigate('/routes')}>All routes</button><button class="quiet-button" onclick={copyEvidence}>{evidenceCopied ? 'Evidence copied' : 'Copy evidence'}</button>{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/sources')}>Source record</button>{/if}{/snippet}
     </PageHead>
     <section class="route-strip" data-component-id="route-resolution-ledger">
       <div class="route-step"><span>PUBLIC NAME</span><strong>{route.domain}</strong><code>{route.tls ? 'HTTPS' : 'HTTP'} · {route.path_prefix || '/'}</code></div>

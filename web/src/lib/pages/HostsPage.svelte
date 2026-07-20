@@ -58,9 +58,11 @@
       <label>Name <input type="text" bind:value={name} placeholder="printer" /></label>
       <label>Address <input type="text" bind:value={address} placeholder="10.0.0.50" /></label>
       <label>OS <input type="text" bind:value={os} placeholder="linux" /></label>
-      <button class="primary-button" disabled={adding}>Add host</button>
-      <button type="button" class="quiet-button" disabled={adding} onclick={() => { showAdd = false; addError = ''; }}>Cancel</button>
-      {#if addError}<span class="status bad" role="alert">{addError}</span>{/if}
+      <div class="form-actions">
+        <button class="primary-button" disabled={adding}>Add host</button>
+        <button type="button" class="quiet-button" disabled={adding} onclick={() => { showAdd = false; addError = ''; }}>Cancel</button>
+        {#if addError}<span class="status bad" role="alert">{addError}</span>{/if}
+      </div>
     </form>
   {/if}
   {#if hosts.length}

@@ -174,7 +174,7 @@
   }
 
   function stateLabel(connector: Inventory['connectors'][number]) {
-    return connectorTone(connector) === 'ok' ? 'Connected' : connector.last_error?.split(':')[0] || 'Connection refused';
+    return connectorTone(connector) === 'ok' ? 'Connected' : 'Not connected';
   }
 
   function setNotice(id: number, tone: 'ok' | 'bad', text: string) {
