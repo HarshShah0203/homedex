@@ -67,6 +67,20 @@ services:
 
 Then use an endpoint such as `ssh://homedex@docker-host.example.net`. OpenSSH enforces private-key permissions, so the files must be readable by container UID/GID `65532` but not group/world-readable. The remote account must be able to run `docker system dial-stdio`; membership in the remote `docker` group is effectively root-equivalent access to that host. Restrict the account/key at the SSH server where practical and allow Homedex egress only to the intended host on TCP 22.
 
+## SSH host (agentless)
+
+For hosts where exposing the Docker API is not an option, and for bare hosts that run no Docker at all. Homedex connects with a dedicated read-only account and records what it observes: `uname`/`hostname` facts, container facts via `docker ps` when the account can run it, and listening sockets via `ss` either way. Listeners bound to loopback are recorded as internal; everything else as published. Ports already explained by Docker (including `docker-proxy` listeners) are not double-counted.
+
+Configuration:
+
+- **SSH host** — `host` or `host:port` (defaults to 22)
+- **User** — a dedicated account; it needs no shell profile, sudo, or docker group membership (without docker access you still get host + port facts)
+- **Private key** — PEM-encoded; key auth only, passwords are deliberately unsupported
+- **Key passphrase** — optional
+- **Host key fingerprint** — required pin. Leave it empty and press *Test connection* once: the error shows the fingerprint the server presented; paste it to pin. Homedex refuses to talk to a host whose key does not match the pin.
+
+The account's credentials are sealed with the instance key like every connector secret. Commands run with a 10 second timeout each and the connector never writes anything over the session.
+
 ## Traefik
 
 Config keys:
