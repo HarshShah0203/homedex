@@ -20,6 +20,7 @@
     { kind: 'traefik', label: 'Traefik', name: 'Traefik', schedule: 15 },
     { kind: 'caddy', label: 'Caddy', name: 'Caddy', schedule: 15 },
     { kind: 'npm', label: 'Nginx Proxy Manager', name: 'Nginx Proxy Manager', schedule: 15 },
+    { kind: 'ssh', label: 'SSH host', name: 'SSH host', schedule: 15 },
     { kind: 'tlsprobe', label: 'TLS probe', name: 'TLS probe', schedule: 1440 },
     { kind: 'rdap', label: 'RDAP domains', name: 'RDAP domains', schedule: 1440 }
   ];
@@ -45,6 +46,10 @@
   let fTargets = $state('');
   let fTimeout = $state<number | null>(null);
   let fDomains = $state('');
+  let fSshHost = $state('');
+  let fSshKey = $state('');
+  let fSshPassphrase = $state('');
+  let fSshFingerprint = $state('');
 
   function splitLines(value: string): string[] {
     return value.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -62,6 +67,15 @@
         return { targets: splitLines(fTargets), ...(fTimeout && fTimeout > 0 ? { timeout_seconds: fTimeout } : {}) };
       case 'rdap':
         return { domains: splitLines(fDomains) };
+      case 'ssh':
+        return {
+          host: fSshHost.trim(),
+          user: fUsername.trim(),
+          private_key: fSshKey,
+          ...(fSshPassphrase ? { passphrase: fSshPassphrase } : {}),
+          host_key_sha256: fSshFingerprint.trim(),
+          host_name: fHostName.trim()
+        };
       default:
         return { endpoint: fEndpoint.trim(), host_name: fHostName.trim(), host_address: fHostAddress.trim() };
     }
@@ -156,6 +170,10 @@
     fEndpoint = 'tcp://docker-socket-proxy:2375';
     fHostName = '';
     fHostAddress = '';
+    fSshHost = '';
+    fSshKey = '';
+    fSshPassphrase = '';
+    fSshFingerprint = '';
   }
 
   function armDelete(id: number) {
@@ -291,6 +309,13 @@
             <label class="field-label">Timeout, seconds <input type="number" min="1" bind:value={fTimeout} placeholder="Optional" /></label>
           {:else if addKind === 'rdap'}
             <label class="field-label">Domains, one per line <textarea bind:value={fDomains} rows="3" placeholder="example.com"></textarea></label>
+          {:else if addKind === 'ssh'}
+            <label class="field-label">SSH host <input bind:value={fSshHost} placeholder="nas.lab.internal:22" /></label>
+            <label class="field-label">User <input bind:value={fUsername} placeholder="inventory" /></label>
+            <label class="field-label">Private key <textarea bind:value={fSshKey} rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label>
+            <label class="field-label">Key passphrase <input type="password" bind:value={fSshPassphrase} placeholder="Optional" /></label>
+            <label class="field-label">Host key fingerprint <input bind:value={fSshFingerprint} placeholder="Test connection shows it" /></label>
+            <label class="field-label">Host name override <input bind:value={fHostName} placeholder="Optional" /></label>
           {/if}
           <label class="field-label">Schedule, minutes <input type="number" min="1" bind:value={addSchedule} /></label>
           <div class="form-actions">
