@@ -61,3 +61,6 @@ form.source-editor textarea{width:100%;min-height:88px;border:1px solid var(--bo
 .note-entry{width:100%;min-height:110px;border:1px solid var(--border);background:var(--panel);color:var(--text);padding:9px 10px;border-radius:0;resize:vertical;font-size:12px;line-height:1.55;margin-bottom:10px}.note-entry:focus{outline:0;border-color:var(--accent)}.note-entry::placeholder{color:var(--muted)}
 /* Between the mobile collapse and full desktop, the sources register is narrower than its column minimums — scroll it instead of clipping. */
 @media(min-width:561px){.sources-register .register{overflow-x:auto}.sources-register .source-cols{min-width:860px}}
+/* Connector errors can be multi-line and instructional (the SSH collector prints the exact authorized_keys line to add), so form status messages wrap and keep their line breaks instead of overflowing on one nowrap line. */
+form.source-editor .status,.source-actions .status{white-space:pre-line;overflow-wrap:anywhere;line-height:1.55;font-weight:600;max-width:100%}
+form.source-editor .form-actions .status{flex-basis:100%;margin-top:2px}

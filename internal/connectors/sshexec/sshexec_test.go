@@ -157,3 +157,46 @@ func TestFingerprintNormalization(t *testing.T) {
 		t.Fatal("fingerprint normalization broken")
 	}
 }
+
+// encryptedKey is testKey's ed25519 counterpart sealed with "secret123".
+const encryptedKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABCWzxDX5I\n0LJ1M3edj2LKuzAAAAGAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIGXsRNCAYxCsLt5W\n3deTSJfoy3VQgpyf88qOymnjWfbIAAAAkHLcZZ5Tct6r+cp/UQwy7K8jvLAeSNcUg4zJd7\nhWYEQQ3+WA1LW1Bua9m1zF5c5JwDpj+ik0gV+Gjr32SFktMc+wwaDBZwOFlL7D0V9Fdfla\nhSH1jngUcG6CqHuVrThZD5qeajJI/aMBQ3wVg0dO/azxWAmoEx87M5q1jbovkedO+7VfCN\ns0RPr9swePIiXS3A==\n-----END OPENSSH PRIVATE KEY-----\n"
+
+// Keys are pasted into a browser textarea, so the parser has to survive the
+// ways a paste realistically arrives. Reported in #6.
+func TestParseSignerAcceptsRealisticPastes(t *testing.T) {
+	indented := "   " + strings.ReplaceAll(testKey, "\n", "\n   ")
+	for name, cfg := range map[string]Config{
+		"clean":               {PrivateKey: testKey},
+		"surrounding blanks":  {PrivateKey: "\n  \n" + testKey + "  \n\n"},
+		"indented":            {PrivateKey: indented},
+		"crlf":                {PrivateKey: strings.ReplaceAll(testKey, "\n", "\r\n")},
+		"no trailing newline": {PrivateKey: strings.TrimRight(testKey, "\n")},
+		// Browsers autofill saved credentials into password inputs; a stray
+		// passphrase on an unencrypted key must not break the source.
+		"unencrypted plus autofilled passphrase": {PrivateKey: testKey, Passphrase: "autofilled"},
+		"encrypted with passphrase":              {PrivateKey: encryptedKey, Passphrase: "secret123"},
+	} {
+		if _, err := parseSigner(cfg); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestParseSignerExplainsCommonMistakes(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg  Config
+		want string
+	}{
+		"public key pasted":  {Config{PrivateKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA user@host"}, "public key"},
+		"missing passphrase": {Config{PrivateKey: encryptedKey}, "passphrase field"},
+		"wrong passphrase":   {Config{PrivateKey: encryptedKey, Passphrase: "nope"}, "decrypt"},
+	} {
+		_, err := parseSigner(tc.cfg)
+		if err == nil {
+			t.Fatalf("%s: expected an error", name)
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: want message containing %q, got %q", name, tc.want, err)
+		}
+	}
+}

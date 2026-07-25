@@ -92,14 +92,78 @@ func hostID(host string) string {
 	return host
 }
 
-func dialSSH(ctx context.Context, cfg Config) (runner, error) {
-	var signer ssh.Signer
-	var err error
-	if cfg.Passphrase != "" {
-		signer, err = ssh.ParsePrivateKeyWithPassphrase([]byte(cfg.PrivateKey), []byte(cfg.Passphrase))
-	} else {
-		signer, err = ssh.ParsePrivateKey([]byte(cfg.PrivateKey))
+// candidateKeys returns the pasted key plus a de-indented variant. PEM is
+// whitespace sensitive and a key pasted into a browser textarea often arrives
+// wrapped in blank lines or indented by an editor, so retry a cleaned copy
+// rather than rewriting what the operator supplied on the first attempt.
+func candidateKeys(raw string) [][]byte {
+	trimmed := strings.TrimSpace(raw) + "\n"
+	candidates := [][]byte{[]byte(trimmed)}
+	var cleaned strings.Builder
+	for _, line := range strings.Split(trimmed, "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		cleaned.WriteString(line)
+		cleaned.WriteString("\n")
 	}
+	if cleaned.String() != trimmed {
+		candidates = append(candidates, []byte(cleaned.String()))
+	}
+	return candidates
+}
+
+func looksLikePublicKey(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	for _, prefix := range []string{"ssh-", "ecdsa-", "sk-ssh-", "sk-ecdsa-"} {
+		if strings.HasPrefix(raw, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseOne(key []byte, passphrase string) (ssh.Signer, error) {
+	if passphrase != "" {
+		signer, err := ssh.ParsePrivateKeyWithPassphrase(key, []byte(passphrase))
+		if err == nil {
+			return signer, nil
+		}
+		// Browsers autofill saved credentials into password fields. An
+		// unencrypted key plus a stray passphrase must still work.
+		if strings.Contains(err.Error(), "not password protected") {
+			return ssh.ParsePrivateKey(key)
+		}
+		return nil, err
+	}
+	signer, err := ssh.ParsePrivateKey(key)
+	if err != nil {
+		var missing *ssh.PassphraseMissingError
+		if errors.As(err, &missing) {
+			return nil, errors.New("this key is passphrase protected; enter it in the key passphrase field")
+		}
+		return nil, err
+	}
+	return signer, nil
+}
+
+func parseSigner(cfg Config) (ssh.Signer, error) {
+	if looksLikePublicKey(cfg.PrivateKey) {
+		return nil, errors.New("that is a public key; paste the matching private key file instead (for example ~/.ssh/id_ed25519, which starts with -----BEGIN)")
+	}
+	var lastErr error
+	for _, key := range candidateKeys(cfg.PrivateKey) {
+		signer, err := parseOne(key, cfg.Passphrase)
+		if err == nil {
+			return signer, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func dialSSH(ctx context.Context, cfg Config) (runner, error) {
+	signer, err := parseSigner(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("parse private key: %w", err)
 	}
@@ -135,6 +199,15 @@ func dialSSH(ctx context.Context, cfg Config) (runner, error) {
 		if result.err != nil {
 			if observed != "" && cfg.HostKeySHA256 == "" {
 				return nil, fmt.Errorf("host key is not pinned. The server presented %s — paste that value into the host key fingerprint field to pin it", observed)
+			}
+			// "unable to authenticate" means the transport and host key were
+			// fine and the server refused the key. Without naming the key we
+			// offered, that is undiagnosable, so print the exact
+			// authorized_keys line the host needs.
+			if strings.Contains(result.err.Error(), "unable to authenticate") {
+				line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+				return nil, fmt.Errorf("%s accepted the connection but rejected this key for user %q. Homedex offered %s (%s). Add this line to ~/.ssh/authorized_keys for %s on that host, or correct the user name, then test again:\n%s",
+					hostAddr(cfg.Host), cfg.User, ssh.FingerprintSHA256(signer.PublicKey()), signer.PublicKey().Type(), cfg.User, line)
 			}
 			return nil, fmt.Errorf("SSH connect to %s: %w", hostAddr(cfg.Host), result.err)
 		}

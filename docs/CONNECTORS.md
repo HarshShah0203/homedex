@@ -81,6 +81,13 @@ Configuration:
 
 The account's credentials are sealed with the instance key like every connector secret. Commands run with a 10 second timeout each and the connector never writes anything over the session.
 
+Troubleshooting:
+
+- **"accepted the connection but rejected this key"** — the transport and host key were fine, the server refused the key. The error prints the exact fingerprint and `authorized_keys` line Homedex offered: append that line to `~/.ssh/authorized_keys` for the user you configured, or correct the user name. Note this is per-account: a key that works for your login is not automatically authorized for the read-only account.
+- **"this key is passphrase protected"** — fill the key passphrase field.
+- **"that is a public key"** — paste the private key file (`~/.ssh/id_ed25519`), not `id_ed25519.pub`.
+- Keys pasted with surrounding blank lines or editor indentation are handled; a stray value autofilled into the passphrase field by a browser is ignored for unencrypted keys.
+
 ## Traefik
 
 Config keys:
