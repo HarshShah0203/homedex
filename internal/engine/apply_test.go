@@ -160,8 +160,15 @@ func TestApplyTreatsSameComposeIdentityAsRecreated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changes != 1 {
-		t.Fatalf("changes=%d, want one recreated change", changes)
+	// The row is still adopted rather than duplicated -- that is what this test is
+	// about. It is no longer *reported*, because a moved key on its own no longer
+	// implies a redeploy: connectors key on the container name now, which a
+	// recreate reuses, so the only thing that moves a key is a connector changing
+	// scheme. Reporting that would file "recreated" against every service in the
+	// inventory the first time an existing install scans after upgrading. A real
+	// redeploy still surfaces through the image, tag, digest, or state diff.
+	if changes != 0 {
+		t.Fatalf("changes=%d, want a silent re-key", changes)
 	}
 	var count int
 	var key string

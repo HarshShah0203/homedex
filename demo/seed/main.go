@@ -194,7 +194,7 @@ func service(name, host, stack, image, tag, ip string, aliases ...string) domain
 		"com.docker.compose.service": name,
 	}
 	return domain.Service{
-		Key: "container:" + host + ":" + name, HostKey: "docker:" + host, Name: name,
+		Key: "docker:" + host + ":" + name, HostKey: "docker:" + host, Name: name,
 		Kind: "container", Stack: stack, Image: image, Tag: tag, State: "running", Health: "healthy",
 		RestartPolicy: "unless-stopped", RawLabels: labels,
 		Networks: []domain.ServiceNetwork{{Name: "proxy", IP: ip, Aliases: aliases}},
@@ -207,7 +207,7 @@ func port(serviceName, host string, number, containerPort int, published bool, p
 		hostIP = "0.0.0.0"
 	}
 	return domain.Port{
-		ServiceKey: "container:" + host + ":" + serviceName, HostKey: "docker:" + host,
+		ServiceKey: "docker:" + host + ":" + serviceName, HostKey: "docker:" + host,
 		Number: number, ContainerPort: containerPort, Published: published, Protocol: protocol,
 		HostIP: hostIP, Source: "docker",
 	}

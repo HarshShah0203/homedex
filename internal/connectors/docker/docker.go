@@ -175,11 +175,21 @@ func mapContainer(hostKey string, summary types.Container, in types.ContainerJSO
 		imageRef = in.Config.Image
 	}
 	name := strings.TrimPrefix(in.Name, "/")
-	if v := labels["com.docker.compose.service"]; v != "" {
-		name = v
-	}
 	if name == "" && len(summary.Names) > 0 {
 		name = strings.TrimPrefix(summary.Names[0], "/")
+	}
+	// The container name is the identity. It is unique per daemon and a recreate
+	// (image bump, or `up` after `down`) reuses it, whereas the container ID is
+	// new every time -- keying on the ID orphaned the notes and first_seen of
+	// anything that got redeployed. The compose service name cannot be the
+	// identity either: `--scale web=3` gives three live containers the same one.
+	// It is still the better label, so it stays as the display name.
+	containerName := name
+	if containerName == "" {
+		containerName = in.ID
+	}
+	if v := labels["com.docker.compose.service"]; v != "" {
+		name = v
 	}
 	image, tag := splitImage(imageRef)
 	digest := summary.ImageID
@@ -195,7 +205,7 @@ func mapContainer(hostKey string, summary types.Container, in types.ContainerJSO
 	if in.HostConfig != nil {
 		restart = string(in.HostConfig.RestartPolicy.Name)
 	}
-	svc := domain.Service{Key: "container:" + in.ID, HostKey: hostKey, Name: name, Kind: "container", Stack: labels["com.docker.compose.project"], Image: image, Tag: tag, Digest: digest, State: state, Health: health, RestartPolicy: restart, RawLabels: labels}
+	svc := domain.Service{Key: hostKey + ":" + containerName, HostKey: hostKey, Name: name, Kind: "container", Stack: labels["com.docker.compose.project"], Image: image, Tag: tag, Digest: digest, State: state, Health: health, RestartPolicy: restart, RawLabels: labels}
 	if in.NetworkSettings != nil {
 		for network, ep := range in.NetworkSettings.Networks {
 			if ep != nil {

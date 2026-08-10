@@ -329,10 +329,22 @@ func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, no
 				if _, err = tx.ExecContext(ctx, `UPDATE services SET natural_key=?,host_id=?,kind=?,image=?,tag=?,digest=?,state=?,health=?,last_seen=?,restart_policy=?,raw_labels=?,updated_at=? WHERE id=?`, s.NaturalKey(), hostID, defaultString(s.Kind, "container"), s.Image, s.Tag, s.Digest, newState, s.Health, now, s.RestartPolicy, string(labels), now, id); err != nil {
 					return nil, 0, err
 				}
-				if err = addChange(ctx, tx, runID, "service", id, "modified", "Service "+s.Name+" recreated", map[string]any{"natural_key": map[string]string{"before": recreatedKey, "after": s.NaturalKey()}}, now); err != nil {
-					return nil, 0, err
+				// A connector that changes its key scheme re-keys everything it owns on
+				// the next scan. That is bookkeeping, not a redeploy, so report it only
+				// when something observable moved with it -- otherwise an upgrade files
+				// "recreated" against every container in the inventory at once, which is
+				// a false entry in the one log the user is meant to trust.
+				diff := fieldsDiff(
+					map[string]string{"name": oldName, "stack": oldStack, "image": oldImage, "tag": oldTag, "digest": oldDigest, "state": oldState},
+					map[string]string{"name": s.Name, "stack": s.Stack, "image": s.Image, "tag": s.Tag, "digest": s.Digest, "state": newState},
+				)
+				if len(diff) > 0 {
+					diff["natural_key"] = map[string]string{"before": recreatedKey, "after": s.NaturalKey()}
+					if err = addChange(ctx, tx, runID, "service", id, "modified", "Service "+s.Name+" recreated", diff, now); err != nil {
+						return nil, 0, err
+					}
+					changes++
 				}
-				changes++
 				ids[s.NaturalKey()] = id
 				continue
 			}
@@ -364,6 +376,17 @@ func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, no
 	}
 	n, err := markGone(ctx, tx, "services", connectorID, runID, seen, now)
 	return ids, changes + n, err
+}
+
+// portIdentity is what identifies a port independently of the natural key
+// string: the service it belongs to and the tuple it exposes. published and
+// source are excluded because they are the mutable fields applyPorts diffs.
+type portIdentity struct {
+	serviceID     int64
+	number        int
+	protocol      string
+	containerPort int
+	hostIP        string
 }
 
 // portRow is an existing persisted port, loaded so applyPorts can reconcile by
@@ -399,8 +422,29 @@ func applyPorts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 	}
 	rows.Close()
 
+	// A port's natural key embeds its service's, so anything that moves a service
+	// key -- a connector changing identity scheme, or a container recreate -- would
+	// otherwise make every port look absent, deleting the rows and orphaning the
+	// notes and tags hanging off their ids. Index what is already stored by the
+	// identity that does not move (the resolved service plus the port tuple) so an
+	// incoming port whose key missed can adopt its own previous row.
+	byIdentity := make(map[portIdentity]string, len(old))
+	oldKeys := make([]string, 0, len(old))
+	for key := range old {
+		oldKeys = append(oldKeys, key)
+	}
+	sort.Strings(oldKeys) // deterministic when two rows somehow share an identity
+	for _, key := range oldKeys {
+		r := old[key]
+		ident := portIdentity{serviceID: r.serviceID, number: r.number, protocol: r.protocol, containerPort: r.containerPort, hostIP: r.hostIP}
+		if _, taken := byIdentity[ident]; !taken {
+			byIdentity[ident] = key
+		}
+	}
+
 	changes := 0
 	seen := map[string]bool{}
+	used := map[string]bool{} // stored keys claimed this run, by hit or by adoption
 	for _, p := range items {
 		key := p.NaturalKey()
 		if seen[key] {
@@ -416,7 +460,23 @@ func applyPorts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 			hid = sql.NullInt64{Int64: id, Valid: true}
 		}
 		protocol := defaultString(p.Protocol, "tcp")
-		if prev, exists := old[key]; exists {
+		prev, exists := old[key]
+		if exists {
+			used[key] = true
+		} else {
+			ident := portIdentity{serviceID: sid, number: p.Number, protocol: protocol, containerPort: p.ContainerPort, hostIP: p.HostIP}
+			if prevKey, ok := byIdentity[ident]; ok && !used[prevKey] {
+				prev, exists = old[prevKey], true
+				used[prevKey] = true
+				// Carry the row across to its new key. Nothing about the port itself
+				// changed, so this records no entry in the change feed -- otherwise a
+				// re-key would report every port on every host as modified at once.
+				if _, err = tx.ExecContext(ctx, `UPDATE ports SET natural_key=? WHERE id=?`, key, prev.id); err != nil {
+					return 0, err
+				}
+			}
+		}
+		if exists {
 			// Reconcile in place so the id (and its metadata) survives. Only mutable
 			// columns (published, source) or a re-linked service/host can differ for
 			// a stable natural key; write and record a change only when they do.
@@ -456,7 +516,7 @@ func applyPorts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 	// id so the entity history drawer shows it. Sorted for deterministic output.
 	absent := make([]string, 0)
 	for key := range old {
-		if !seen[key] {
+		if !used[key] {
 			absent = append(absent, key)
 		}
 	}

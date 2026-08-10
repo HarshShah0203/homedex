@@ -115,7 +115,10 @@ func TestIndependentSourcesKeepStableSourceLocalKeys(t *testing.T) {
 	if first.Hosts[0].NaturalKey() != "docker:nas" || second.Hosts[0].NaturalKey() != first.Hosts[0].NaturalKey() {
 		t.Fatalf("host keys first/second=%q/%q", first.Hosts[0].NaturalKey(), second.Hosts[0].NaturalKey())
 	}
-	wantServiceKey := "container:" + list[0].ID
+	// Keyed by host and container name, not container ID, so the key survives a
+	// recreate. Derived from the fixture rather than written out, so it keeps
+	// tracking the scheme instead of pinning one literal.
+	wantServiceKey := "docker:nas:" + strings.TrimPrefix(inspect.Name, "/")
 	if first.Services[0].NaturalKey() != wantServiceKey || second.Services[0].NaturalKey() != wantServiceKey {
 		t.Fatalf("service keys first/second=%q/%q, want %q", first.Services[0].NaturalKey(), second.Services[0].NaturalKey(), wantServiceKey)
 	}
