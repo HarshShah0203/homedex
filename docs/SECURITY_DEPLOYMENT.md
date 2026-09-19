@@ -13,7 +13,7 @@ The repository stack:
 - drops all Linux capabilities and sets `no-new-privileges`;
 - runs Homedex as distroless UID/GID `65532`;
 - keeps `/data` in a dedicated writable volume;
-- binds the UI to `127.0.0.1:7377` by default.
+- binds the UI to `127.0.0.1:7377` by default (`HOMEDEX_BIND` changes the address; see below before widening it).
 
 Run `./scripts/check-compose-security.sh` after editing Compose. The check validates the rendered configuration rather than only grepping YAML.
 

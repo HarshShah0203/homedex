@@ -41,7 +41,9 @@ services:
     depends_on:
       - docker-socket-proxy
     ports:
-      - "127.0.0.1:${HOMEDEX_PORT:-7377}:7377"
+      # Loopback by default: until setup completes, whoever reaches the UI first
+      # sets the admin password. HOMEDEX_BIND=0.0.0.0 opens it to the LAN.
+      - "${HOMEDEX_BIND:-127.0.0.1}:${HOMEDEX_PORT:-7377}:7377"
     environment:
       HOMEDEX_DATA_DIR: /data
       HOMEDEX_LISTEN: :7377

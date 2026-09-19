@@ -1,6 +1,6 @@
 # Connector Configuration
 
-Homedex v0.1 exposes connector CRUD/test/scan APIs. The visual connector editor is not yet the supported persistence path, so use `scripts/add-connector.sh` with JSON config files.
+Add sources in the UI under **Sources**, or script them with `scripts/add-connector.sh` and the JSON config files below.
 
 For the first connector:
 
@@ -16,7 +16,7 @@ For later connectors, omit `--setup`; the script prompts for the existing admin 
   docs/examples/connectors/traefik.json
 ```
 
-Set `HOMEDEX_URL` if Homedex is not at `http://127.0.0.1:7377`. `--no-auth` is available only for instances intentionally running with `HOMEDEX_NO_AUTH=true`. The API encrypts config before writing SQLite and performs an initial scan immediately. A failed scan returns an error while preserving connector status for diagnosis.
+`HOMEDEX_URL` tells this script where Homedex is (default `http://127.0.0.1:7377`); it is not a server setting. To reach the UI from other machines, see `HOMEDEX_BIND` in the README quickstart. `--no-auth` is available only for instances intentionally running with `HOMEDEX_NO_AUTH=true`. The API encrypts config before writing SQLite and performs an initial scan immediately. A failed scan returns an error while preserving connector status for diagnosis.
 
 ## Docker
 
@@ -42,6 +42,10 @@ Supported endpoint forms:
 `host_address` should be the address reverse proxies use when they target a host-published port; it enables medium-confidence route resolution.
 
 Read [DOCKER_SOCKET_PROXY.md](DOCKER_SOCKET_PROXY.md) before deviating from the Compose default.
+
+### Podman
+
+Podman serves a Docker-compatible API, so add it as a `docker` source. Enable the socket (`sudo systemctl enable --now podman.socket`, or `systemctl --user enable --now podman.socket` for rootless) and set `endpoint` to `unix:///run/podman/podman.sock` (rootful) or `unix:///run/user/<uid>/podman/podman.sock` (rootless). Tested against Podman 5.8: host, containers, images, Compose labels, and published ports are discovered the same way as with Docker.
 
 ### Docker over SSH in the stock image
 
