@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
@@ -23,9 +24,12 @@ type EntityRef struct {
 }
 
 type Host struct {
+	ID      int64
 	Ref     EntityRef
+	Kind    string
 	Name    string
 	Address string
+	Aliases []string
 }
 
 type Service struct {
@@ -41,18 +45,20 @@ type Port struct {
 	Number        int
 	ContainerPort int
 	Published     bool
+	HostIP        string
 }
 
 // Routes applies deterministic route-to-container resolution. It never probes
 // or mutates connected infrastructure.
 func Routes(routes []domain.Route, inv Inventory) []domain.Route {
+	links := linkMachines(inv.Hosts)
 	out := append([]domain.Route(nil), routes...)
 	for i := range out {
-		resolve(&out[i], inv)
+		resolve(&out[i], inv, links)
 	}
 	return out
 }
-func resolve(route *domain.Route, inv Inventory) {
+func resolve(route *domain.Route, inv Inventory, links map[EntityRef]EntityRef) {
 	host := normalize(route.UpstreamHost)
 	proxyHost := EntityRef{ConnectorID: route.ProxyHostConnectorID, Key: route.ProxyHostKey}
 	// Network IP match is strongest only after all candidates are collected and
@@ -100,17 +106,31 @@ func resolve(route *domain.Route, inv Inventory) {
 	}
 	// Published host port. localhost and Docker gateway names are accepted when
 	// exactly one published mapping matches, avoiding false high-confidence links.
+	// A host is addressed by its address or any alias, and a tailnet device also
+	// stands for the machine it is linked to, whose connector reports the ports.
 	local := host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "host.docker.internal" || host == "gateway.docker.internal"
 	hostRefs := map[EntityRef]bool{}
 	for _, h := range inv.Hosts {
-		if normalize(h.Address) == host {
-			hostRefs[h.Ref] = true
+		if !addressedBy(h, host) {
+			continue
+		}
+		hostRefs[h.Ref] = true
+		if m, ok := links[h.Ref]; ok {
+			hostRefs[m] = true
 		}
 	}
+	// A loopback-only listener (the SSH collector records those unpublished) is
+	// reachable only from a proxy running on that same host, and only through a
+	// loopback upstream; host.docker.internal reaches the bridge, not loopback.
+	loopbackUpstream := validRef(proxyHost) && loopback(host)
 	var candidates []EntityRef
 	for _, p := range inv.Ports {
+		if p.Number != route.UpstreamPort {
+			continue
+		}
 		localHostMatch := local && (!validRef(proxyHost) || proxyHost == p.HostRef)
-		if p.Published && p.Number == route.UpstreamPort && (localHostMatch || hostRefs[p.HostRef]) {
+		loop := loopbackUpstream && !p.Published && p.HostRef == proxyHost && loopback(p.HostIP)
+		if (p.Published && (localHostMatch || hostRefs[p.HostRef])) || loop {
 			candidates = append(candidates, p.ServiceRef)
 		}
 	}
@@ -192,6 +212,140 @@ func confidenceForPort(verified bool) string {
 func normalize(s string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), "."))
 }
+
+// canonicalHost lets the spellings of one IP ("[fd7a::5]", "fd7a:0:0::5",
+// "::ffff:10.0.0.2") compare equal; anything else is compared normalized.
+func canonicalHost(s string) string {
+	s = strings.Trim(normalize(s), "[]")
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a.Unmap().String()
+	}
+	return s
+}
+
+// shortName is the first DNS label of a host name, or "" for an IP or
+// localhost, which name no particular machine.
+func shortName(s string) string {
+	s = normalize(s)
+	if s == "" || s == "localhost" {
+		return ""
+	}
+	if _, err := netip.ParseAddr(strings.Trim(s, "[]")); err == nil {
+		return ""
+	}
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+func loopback(s string) bool {
+	s = normalize(s)
+	if s == "localhost" {
+		return true
+	}
+	a, err := netip.ParseAddr(strings.Trim(s, "[]"))
+	return err == nil && a.Unmap().IsLoopback()
+}
+
+// addressedBy reports whether a route upstream host (already normalized)
+// names h by its address or one of its aliases.
+func addressedBy(h Host, host string) bool {
+	if normalize(h.Address) == host {
+		return true
+	}
+	want := canonicalHost(host)
+	if want == "" {
+		return false
+	}
+	if canonicalHost(h.Address) == want {
+		return true
+	}
+	for _, alias := range h.Aliases {
+		if canonicalHost(alias) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// linkMachines pairs each tailnet device with the machine another connector
+// (Docker, SSH, manual) reports under the same short host name. It makes no
+// guesses: ambiguity on either side -- two machines with that name, or two
+// devices claiming one machine -- leaves the device unlinked.
+func linkMachines(hosts []Host) map[EntityRef]EntityRef {
+	byName := map[string][]EntityRef{}
+	for _, h := range hosts {
+		if h.Kind == domain.HostKindTailscale {
+			continue
+		}
+		if name := shortName(h.Name); name != "" {
+			byName[name] = append(byName[name], h.Ref)
+		}
+	}
+	links := map[EntityRef]EntityRef{}
+	claims := map[EntityRef]int{}
+	for _, h := range hosts {
+		if h.Kind != domain.HostKindTailscale {
+			continue
+		}
+		matches := map[EntityRef]bool{}
+		for _, name := range append([]string{h.Name}, h.Aliases...) {
+			for _, ref := range byName[shortName(name)] {
+				matches[ref] = true
+			}
+		}
+		if len(matches) != 1 {
+			continue
+		}
+		for machine := range matches {
+			links[h.Ref] = machine
+			claims[machine]++
+		}
+	}
+	for device, machine := range links {
+		if claims[machine] > 1 {
+			delete(links, device)
+		}
+	}
+	return links
+}
+
+// MachineHostIDs returns the ids of the hosts a proxy URL's host name refers
+// to, by name, address or alias. A tailnet device stands for the machine it is
+// linked to and is dropped when unlinked: scoping a proxy to a device that runs
+// no services would hide every candidate.
+func MachineHostIDs(hosts []Host, hostname string) []int64 {
+	name := normalize(hostname)
+	if name == "" {
+		return nil
+	}
+	links := linkMachines(hosts)
+	byRef := make(map[EntityRef]int64, len(hosts))
+	for _, h := range hosts {
+		byRef[h.Ref] = h.ID
+	}
+	seen := map[int64]bool{}
+	var ids []int64
+	add := func(id int64) {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	for _, h := range hosts {
+		if normalize(h.Name) != name && !addressedBy(h, name) {
+			continue
+		}
+		if h.Kind != domain.HostKindTailscale {
+			add(h.ID)
+		} else if machine, ok := links[h.Ref]; ok {
+			add(byRef[machine])
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
 func nameMatch(host string, s Service) bool {
 	if host == normalize(s.Name) {
 		return true
@@ -266,23 +420,35 @@ func dedupeRefs(in []EntityRef) []EntityRef {
 	return out
 }
 
+// LoadHosts returns the active hosts with the identifiers route resolution and
+// proxy linking match on.
+func LoadHosts(ctx context.Context, db *sql.DB) ([]Host, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id,COALESCE(connector_id,0),natural_key,name,kind,address,aliases FROM hosts WHERE state='active' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hosts []Host
+	for rows.Next() {
+		var h Host
+		var aliases string
+		if err = rows.Scan(&h.ID, &h.Ref.ConnectorID, &h.Ref.Key, &h.Name, &h.Kind, &h.Address, &aliases); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(aliases), &h.Aliases)
+		hosts = append(hosts, h)
+	}
+	return hosts, rows.Err()
+}
+
 // LoadInventory returns active Docker observations needed by Routes.
 func LoadInventory(ctx context.Context, db *sql.DB) (Inventory, error) {
 	var inv Inventory
-	rows, e := db.QueryContext(ctx, `SELECT COALESCE(connector_id,0),natural_key,name,address FROM hosts WHERE state='active'`)
-	if e != nil {
+	var e error
+	if inv.Hosts, e = LoadHosts(ctx, db); e != nil {
 		return inv, e
 	}
-	for rows.Next() {
-		var h Host
-		if e = rows.Scan(&h.Ref.ConnectorID, &h.Ref.Key, &h.Name, &h.Address); e != nil {
-			rows.Close()
-			return inv, e
-		}
-		inv.Hosts = append(inv.Hosts, h)
-	}
-	rows.Close()
-	rows, e = db.QueryContext(ctx, `SELECT s.id,COALESCE(s.connector_id,0),s.natural_key,s.name,COALESCE(h.connector_id,0),COALESCE(h.natural_key,'') FROM services s LEFT JOIN hosts h ON h.id=s.host_id WHERE s.state!='gone'`)
+	rows, e := db.QueryContext(ctx, `SELECT s.id,COALESCE(s.connector_id,0),s.natural_key,s.name,COALESCE(h.connector_id,0),COALESCE(h.natural_key,'') FROM services s LEFT JOIN hosts h ON h.id=s.host_id WHERE s.state!='gone'`)
 	if e != nil {
 		return inv, e
 	}
@@ -316,13 +482,13 @@ func LoadInventory(ctx context.Context, db *sql.DB) (Inventory, error) {
 		}
 	}
 	rows.Close()
-	rows, e = db.QueryContext(ctx, `SELECT COALESCE(s.connector_id,0),s.natural_key,COALESCE(h.connector_id,0),COALESCE(h.natural_key,''),p.number,p.container_port,p.published FROM ports p JOIN services s ON s.id=p.service_id LEFT JOIN hosts h ON h.id=p.host_id`)
+	rows, e = db.QueryContext(ctx, `SELECT COALESCE(s.connector_id,0),s.natural_key,COALESCE(h.connector_id,0),COALESCE(h.natural_key,''),p.number,p.container_port,p.published,p.host_ip FROM ports p JOIN services s ON s.id=p.service_id LEFT JOIN hosts h ON h.id=p.host_id`)
 	if e != nil {
 		return inv, e
 	}
 	for rows.Next() {
 		var p Port
-		if e = rows.Scan(&p.ServiceRef.ConnectorID, &p.ServiceRef.Key, &p.HostRef.ConnectorID, &p.HostRef.Key, &p.Number, &p.ContainerPort, &p.Published); e != nil {
+		if e = rows.Scan(&p.ServiceRef.ConnectorID, &p.ServiceRef.Key, &p.HostRef.ConnectorID, &p.HostRef.Key, &p.Number, &p.ContainerPort, &p.Published, &p.HostIP); e != nil {
 			rows.Close()
 			return inv, e
 		}
@@ -355,9 +521,11 @@ func ReconcileStore(ctx context.Context, db *sql.DB) error {
 		items = append(items, x)
 	}
 	rows.Close()
+	links := linkMachines(inv.Hosts)
 	for _, x := range items {
 		x.r.ProxyNetworks = proxyNetworks(inv, EntityRef{ConnectorID: x.r.ProxyHostConnectorID, Key: x.r.ProxyHostKey}, x.endpoint)
-		r := Routes([]domain.Route{x.r}, inv)[0]
+		r := x.r
+		resolve(&r, inv, links)
 		var sid any
 		if r.ResolvedServiceKey != "" {
 			var id int64

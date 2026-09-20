@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -67,22 +66,26 @@ func (r *Runner) Scan(ctx context.Context, id int64) (int64, int, error) {
 	}
 	stats := map[string]int{"hosts": len(snap.Hosts), "services": len(snap.Services), "ports": len(snap.Ports), "routes": len(snap.Routes), "certs": len(snap.Certs), "domains": len(snap.Domains)}
 	r.publish(Event{Type: "scan.progress", ConnectorID: id, Phase: "discover", Message: "Discovery complete", Progress: 60, Stats: stats})
-	if rec.Kind == "traefik" || rec.Kind == "caddy" || rec.Kind == "npm" {
-		if proxyID, pe := r.ensureProxy(ctx, id, rec.Kind, cfg); pe == nil {
-			proxyHost, proxyNetworks, scopeErr := resolve.LoadProxyScope(ctx, r.Store.DB(), proxyID)
-			if scopeErr != nil {
-				r.failed(ctx, id, started, scopeErr)
-				return 0, 0, scopeErr
-			}
-			for i := range snap.Routes {
-				snap.Routes[i].ProxyID = &proxyID
-				snap.Routes[i].ProxyHostConnectorID = proxyHost.ConnectorID
-				snap.Routes[i].ProxyHostKey = proxyHost.Key
-				snap.Routes[i].ProxyNetworks = proxyNetworks
-			}
-		} else {
+	if proxyKinds[rec.Kind] {
+		endpoint, pe := proxyEndpoint(c, cfg)
+		var proxyID int64
+		if pe == nil {
+			proxyID, pe = r.ensureProxy(ctx, id, rec.Kind, endpoint)
+		}
+		if pe != nil {
 			r.failed(ctx, id, started, pe)
 			return 0, 0, pe
+		}
+		proxyHost, proxyNetworks, scopeErr := resolve.LoadProxyScope(ctx, r.Store.DB(), proxyID)
+		if scopeErr != nil {
+			r.failed(ctx, id, started, scopeErr)
+			return 0, 0, scopeErr
+		}
+		for i := range snap.Routes {
+			snap.Routes[i].ProxyID = &proxyID
+			snap.Routes[i].ProxyHostConnectorID = proxyHost.ConnectorID
+			snap.Routes[i].ProxyHostKey = proxyHost.Key
+			snap.Routes[i].ProxyNetworks = proxyNetworks
 		}
 	}
 	if len(snap.Routes) > 0 {
@@ -110,7 +113,9 @@ func (r *Runner) addRouteTargets(ctx context.Context, kind string, cfg connector
 	if kind != "tlsprobe" && kind != "rdap" {
 		return
 	}
-	rows, e := r.Store.DB().QueryContext(ctx, `SELECT DISTINCT domain FROM routes WHERE state='active' AND domain!='' AND (?='rdap' OR tls=1)`, kind)
+	// Wildcard route domains ("*.example.com", SWAG's "radarr.*") name no single
+	// host a TLS probe can dial or RDAP can look up.
+	rows, e := r.Store.DB().QueryContext(ctx, `SELECT DISTINCT domain FROM routes WHERE state='active' AND domain!='' AND instr(domain,'*')=0 AND (?='rdap' OR tls=1)`, kind)
 	if e != nil {
 		return
 	}
@@ -144,34 +149,34 @@ func (r *Runner) addRouteTargets(ctx context.Context, kind string, cfg connector
 		cfg[key] = b
 	}
 }
-func (r *Runner) ensureProxy(ctx context.Context, connectorID int64, kind string, cfg connectors.Config) (int64, error) {
+// proxyKinds are the connectors whose routes belong to a proxies row.
+var proxyKinds = map[string]bool{"traefik": true, "caddy": true, "npm": true, "nginx": true}
+
+// proxyEndpoint is the value stored in proxies.endpoint: the connector's own
+// answer when it has one (file-based nginx has no url), else its "url" config.
+func proxyEndpoint(c connectors.Connector, cfg connectors.Config) (string, error) {
+	if p, ok := c.(connectors.ProxyEndpointer); ok {
+		return p.ProxyEndpoint(cfg)
+	}
 	var endpoint string
 	if raw := cfg["url"]; len(raw) > 0 {
 		_ = json.Unmarshal(raw, &endpoint)
 	}
 	if endpoint == "" {
-		return 0, fmt.Errorf("proxy endpoint URL is required")
+		return "", fmt.Errorf("proxy endpoint URL is required")
 	}
+	return endpoint, nil
+}
+
+func (r *Runner) ensureProxy(ctx context.Context, connectorID int64, kind, endpoint string) (int64, error) {
 	var hostID any
 	if u, e := url.Parse(endpoint); e == nil && u.Hostname() != "" {
-		name := strings.ToLower(u.Hostname())
-		rows, queryErr := r.Store.DB().QueryContext(ctx, `SELECT id FROM hosts WHERE state='active' AND (LOWER(address)=? OR LOWER(name)=?) ORDER BY id`, name, name)
-		if queryErr != nil {
-			return 0, queryErr
+		hosts, err := resolve.LoadHosts(ctx, r.Store.DB())
+		if err != nil {
+			return 0, err
 		}
-		var ids []int64
-		for rows.Next() {
-			var candidate int64
-			if scanErr := rows.Scan(&candidate); scanErr != nil {
-				rows.Close()
-				return 0, scanErr
-			}
-			ids = append(ids, candidate)
-		}
-		if closeErr := rows.Close(); closeErr != nil {
-			return 0, closeErr
-		}
-		if len(ids) == 1 {
+		// A tailnet name or IP links the proxy to the machine behind the device.
+		if ids := resolve.MachineHostIDs(hosts, u.Hostname()); len(ids) == 1 {
 			hostID = ids[0]
 		}
 	}

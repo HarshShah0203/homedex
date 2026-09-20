@@ -136,6 +136,15 @@ type Connector interface {
 	Scan(context.Context, Config) (domain.Snapshot, error)
 }
 
+// ProxyEndpointer is implemented by reverse-proxy connectors whose proxies
+// row is not described by a "url" config key (the file-based nginx
+// connector). The value is stored in proxies.endpoint; when it parses as a
+// URL with a host, that host links the proxy to an inventory host and scopes
+// Docker-network resolution exactly as a Traefik/Caddy/NPM url does.
+type ProxyEndpointer interface {
+	ProxyEndpoint(Config) (string, error)
+}
+
 type Registry struct {
 	mu         sync.RWMutex
 	connectors map[string]Connector

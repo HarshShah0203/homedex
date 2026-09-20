@@ -16,6 +16,11 @@ type Snapshot struct {
 	Domains  []Domain
 }
 
+// HostKindTailscale marks a tailnet device. It is a second view of a machine
+// another connector may already report, so route resolution links the two
+// instead of treating the device as a machine of its own.
+const HostKindTailscale = "tailscale"
+
 type Host struct {
 	Key     string
 	Name    string
@@ -24,6 +29,12 @@ type Host struct {
 	OS      string
 	Arch    string
 	Notes   string
+	// Aliases are other identifiers of this host that a route upstream may use
+	// (a second IP, DNS names); route resolution and search match them.
+	Aliases []string
+	// ReportedLastSeen is the source's own last-contact time. It is stored but
+	// excluded from change diffs, because it moves on every poll.
+	ReportedLastSeen *time.Time
 }
 
 func (h Host) NaturalKey() string { return h.Key }

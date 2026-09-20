@@ -247,12 +247,18 @@ func applyHosts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 			return nil, 0, fmt.Errorf("host natural key and name are required")
 		}
 		seen[h.NaturalKey()] = true
+		aliases := normalizeAliases(h.Aliases)
+		aliasesJSON, _ := json.Marshal(aliases)
+		var reported any
+		if h.ReportedLastSeen != nil && !h.ReportedLastSeen.IsZero() {
+			reported = h.ReportedLastSeen.UTC().Format(time.RFC3339Nano)
+		}
 		var id int64
-		var oldName, oldKind, oldAddress, oldOS, oldArch, oldState string
-		err := tx.QueryRowContext(ctx, `SELECT id,name,kind,address,os,arch,state FROM hosts WHERE connector_id=? AND natural_key=?`, connectorID, h.NaturalKey()).Scan(&id, &oldName, &oldKind, &oldAddress, &oldOS, &oldArch, &oldState)
+		var oldName, oldKind, oldAddress, oldOS, oldArch, oldState, oldAliases string
+		err := tx.QueryRowContext(ctx, `SELECT id,name,kind,address,os,arch,state,aliases FROM hosts WHERE connector_id=? AND natural_key=?`, connectorID, h.NaturalKey()).Scan(&id, &oldName, &oldKind, &oldAddress, &oldOS, &oldArch, &oldState, &oldAliases)
 		switch err {
 		case sql.ErrNoRows:
-			r, e := tx.ExecContext(ctx, `INSERT INTO hosts(connector_id,natural_key,name,kind,address,os,arch,notes,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, h.NaturalKey(), h.Name, h.Kind, h.Address, h.OS, h.Arch, h.Notes, now, now, now, now)
+			r, e := tx.ExecContext(ctx, `INSERT INTO hosts(connector_id,natural_key,name,kind,address,os,arch,notes,aliases,reported_last_seen,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, h.NaturalKey(), h.Name, h.Kind, h.Address, h.OS, h.Arch, h.Notes, string(aliasesJSON), reported, now, now, now, now)
 			if e != nil {
 				return nil, 0, e
 			}
@@ -262,8 +268,15 @@ func applyHosts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 			}
 			changes++
 		case nil:
-			diff := fieldsDiff(map[string]string{"name": oldName, "kind": oldKind, "address": oldAddress, "os": oldOS, "arch": oldArch, "state": oldState}, map[string]string{"name": h.Name, "kind": h.Kind, "address": h.Address, "os": h.OS, "arch": h.Arch, "state": "active"})
-			if _, err = tx.ExecContext(ctx, `UPDATE hosts SET connector_id=?,name=?,kind=?,address=?,os=?,arch=?,notes=?,state='active',last_seen=?,updated_at=? WHERE id=?`, connectorID, h.Name, h.Kind, h.Address, h.OS, h.Arch, h.Notes, now, now, id); err != nil {
+			// reported_last_seen is deliberately not a diff key: Tailscale moves it on
+			// every poll, and a 'modified' entry per device per scan would bury real
+			// changes. Rows migrated from before aliases existed hold '[]' and other
+			// connectors send none, so both sides read "" and an upgrade files nothing.
+			diff := fieldsDiff(
+				map[string]string{"name": oldName, "kind": oldKind, "address": oldAddress, "os": oldOS, "arch": oldArch, "state": oldState, "aliases": aliasDisplay(oldAliases)},
+				map[string]string{"name": h.Name, "kind": h.Kind, "address": h.Address, "os": h.OS, "arch": h.Arch, "state": "active", "aliases": strings.Join(aliases, ", ")},
+			)
+			if _, err = tx.ExecContext(ctx, `UPDATE hosts SET connector_id=?,name=?,kind=?,address=?,os=?,arch=?,notes=?,aliases=?,reported_last_seen=?,state='active',last_seen=?,updated_at=? WHERE id=?`, connectorID, h.Name, h.Kind, h.Address, h.OS, h.Arch, h.Notes, string(aliasesJSON), reported, now, now, id); err != nil {
 				return nil, 0, err
 			}
 			if len(diff) > 0 {
@@ -279,6 +292,30 @@ func applyHosts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 	}
 	n, err := markGone(ctx, tx, "hosts", connectorID, runID, seen, now)
 	return ids, changes + n, err
+}
+
+// normalizeAliases trims, drops empties, dedupes and sorts so an alias list
+// reordered by its source does not read as a change. It never returns nil, so
+// the stored JSON is "[]" rather than "null".
+func normalizeAliases(in []string) []string {
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, a := range in {
+		a = strings.TrimSpace(a)
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func aliasDisplay(stored string) string {
+	var aliases []string
+	_ = json.Unmarshal([]byte(stored), &aliases)
+	return strings.Join(normalizeAliases(aliases), ", ")
 }
 
 func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now string, items []domain.Service, hosts map[string]int64) (map[string]int64, int, error) {
@@ -561,8 +598,15 @@ func applyRoutes(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now 
 		}
 		confidence := defaultString(r.ResolveConfidence, "none")
 		status := defaultString(r.Status, "unknown")
+		// A connector that cannot name a port (an unresolved nginx variable, a
+		// caddy dial without one) sends 0. Store NULL: the column's range CHECK
+		// would otherwise fail the whole Apply.
+		port := r.UpstreamPort
+		if port < 1 || port > 65535 {
+			port = 0
+		}
 		if err == sql.ErrNoRows {
-			res, e := tx.ExecContext(ctx, `INSERT INTO routes(connector_id,proxy_id,domain,path_prefix,upstream_host,upstream_port,resolved_service_id,resolve_confidence,tls,status,natural_key,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, r.ProxyID, r.Domain, r.PathPrefix, r.UpstreamHost, r.UpstreamPort, resolved, confidence, r.TLS, status, r.NaturalKey(), now, now, now, now)
+			res, e := tx.ExecContext(ctx, `INSERT INTO routes(connector_id,proxy_id,domain,path_prefix,upstream_host,upstream_port,resolved_service_id,resolve_confidence,tls,status,natural_key,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, r.ProxyID, r.Domain, r.PathPrefix, r.UpstreamHost, nullablePort(port), resolved, confidence, r.TLS, status, r.NaturalKey(), now, now, now, now)
 			if e != nil {
 				return 0, e
 			}
@@ -572,8 +616,8 @@ func applyRoutes(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now 
 			}
 			changes++
 		} else if err == nil {
-			diff := fieldsDiff(map[string]string{"upstream": fmt.Sprintf("%s:%d", oldHost, oldPort), "status": oldStatus, "state": oldState}, map[string]string{"upstream": fmt.Sprintf("%s:%d", r.UpstreamHost, r.UpstreamPort), "status": status, "state": "active"})
-			if _, err = tx.ExecContext(ctx, `UPDATE routes SET connector_id=?,proxy_id=?,domain=?,path_prefix=?,upstream_host=?,upstream_port=?,resolved_service_id=?,resolve_confidence=?,tls=?,status=?,state='active',last_seen=?,updated_at=? WHERE id=?`, connectorID, r.ProxyID, r.Domain, r.PathPrefix, r.UpstreamHost, r.UpstreamPort, resolved, confidence, r.TLS, status, now, now, id); err != nil {
+			diff := fieldsDiff(map[string]string{"upstream": fmt.Sprintf("%s:%d", oldHost, oldPort), "status": oldStatus, "state": oldState}, map[string]string{"upstream": fmt.Sprintf("%s:%d", r.UpstreamHost, port), "status": status, "state": "active"})
+			if _, err = tx.ExecContext(ctx, `UPDATE routes SET connector_id=?,proxy_id=?,domain=?,path_prefix=?,upstream_host=?,upstream_port=?,resolved_service_id=?,resolve_confidence=?,tls=?,status=?,state='active',last_seen=?,updated_at=? WHERE id=?`, connectorID, r.ProxyID, r.Domain, r.PathPrefix, r.UpstreamHost, nullablePort(port), resolved, confidence, r.TLS, status, now, now, id); err != nil {
 				return 0, err
 			}
 			if len(diff) > 0 {
@@ -830,4 +874,10 @@ func nullableString(v string) any {
 		return nil
 	}
 	return v
+}
+func nullablePort(p int) any {
+	if p < 1 || p > 65535 {
+		return nil
+	}
+	return p
 }

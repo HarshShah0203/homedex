@@ -44,7 +44,7 @@ The runtime has no required database server, queue, cache, cloud account, or tel
 
 The application serializes snapshot reconciliation with one process-local mutex while allowing concurrent readers. A scan run and its entity/port/change updates commit atomically.
 
-Main records include connectors, hosts, services, service network aliases, ports, routes, certificates, domains, scan runs, changes, sessions/shares, tags/custom fields, manual expiries, notification rules, and delivery deduplication. FTS5 indexes searchable host/service/route/tag text.
+Main records include connectors, hosts, services, service network aliases, ports, routes, certificates, domains, scan runs, changes, sessions/shares, tags/custom fields, manual expiries, notification rules, and delivery deduplication. FTS5 indexes searchable host (name, address, aliases), service, route, and tag text. A host's `reported_last_seen` (the source's own last-contact time) is stored but never diffed, so a value that moves on every poll does not fill the change feed.
 
 ## Connector boundary
 
@@ -58,6 +58,8 @@ type Connector interface {
 
 Connectors decode encrypted configuration, retrieve source state, and return domain snapshots. They do not receive the database handle. The engine owns reconciliation and marks no-longer-observed entities as gone rather than immediately deleting them.
 
+A reverse-proxy connector whose proxy is not described by a `url` config key (a file-based one) also implements `ProxyEndpointer`; the runner stores its answer as the proxy's endpoint, and a host in that endpoint links the proxy to an inventory host just as a `url` does.
+
 Docker's snapshot model deliberately has no environment-variable field. It retains the network addresses and aliases needed for route resolution.
 
 ## Route resolution
@@ -66,7 +68,7 @@ For every active proxy route, resolution tries deterministic evidence in order:
 
 1. Docker network IP plus matching internal port → `high` confidence.
 2. Container name or network alias plus matching internal port → `high` confidence.
-3. Docker host address plus a unique published port → `medium` confidence.
+3. Host address or alias plus a unique published port → `medium` confidence. A tailnet device also stands for the one machine another connector reports under the same short host name; two such machines, or two devices claiming one, leave it unlinked. A loopback upstream also matches a loopback-only listener on the proxy's own host.
 4. No unique match → `broken`, confidence `none`.
 
 Resolution is rerun after snapshots are applied. The deterministic demo includes all three outcomes.
