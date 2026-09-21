@@ -23,6 +23,7 @@ import (
 	"github.com/HarshShah0203/homedex/internal/connectors/npm"
 	"github.com/HarshShah0203/homedex/internal/connectors/rdap"
 	"github.com/HarshShah0203/homedex/internal/connectors/sshexec"
+	"github.com/HarshShah0203/homedex/internal/connectors/tailscale"
 	"github.com/HarshShah0203/homedex/internal/connectors/tlsprobe"
 	"github.com/HarshShah0203/homedex/internal/connectors/traefik"
 	"github.com/HarshShah0203/homedex/internal/engine"
@@ -68,7 +69,7 @@ func run() error {
 	defer st.Close()
 	broker := server.NewBroker()
 	registry := connectors.NewRegistry()
-	for _, c := range []connectors.Connector{docker.New(), traefik.New(), caddy.New(), npm.New(), tlsprobe.New(), rdap.New(), sshexec.New()} {
+	for _, c := range []connectors.Connector{docker.New(), traefik.New(), caddy.New(), npm.New(), tlsprobe.New(), rdap.New(), sshexec.New(), tailscale.New()} {
 		if err = registry.Register(c); err != nil {
 			return err
 		}
