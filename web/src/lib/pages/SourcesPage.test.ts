@@ -76,6 +76,57 @@ describe('SourcesPage add source', () => {
     // RDAP swaps in a domains textarea.
     await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'rdap' } });
     expect(screen.getByLabelText('Domains, one per line').tagName).toBe('TEXTAREA');
+    // nginx reads mounted config files, with path mappings as a textarea.
+    await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'nginx' } });
+    expect(screen.getByLabelText('Config path')).toBeInTheDocument();
+    expect(screen.getByLabelText('Path mappings, one per line').tagName).toBe('TEXTAREA');
+    // Tailscale defaults to an OAuth client with a masked secret.
+    await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'tailscale' } });
+    expect(screen.getByLabelText('OAuth client ID')).toBeInTheDocument();
+    expect(screen.getByLabelText('OAuth client secret')).toHaveAttribute('type', 'password');
+    expect(screen.queryByLabelText('API access token')).not.toBeInTheDocument();
+  });
+
+  async function createBody(kind: string, fill: () => Promise<void>): Promise<Record<string, unknown>> {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      if (String(input).endsWith('/connectors/test')) return new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ connector: { id: 9 }, scan_run_id: 3, changes: 1, scan_error: '' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const inventory = createDemoInventory();
+    inventory.source = 'api';
+    render(SourcesPage, { props: { inventory } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: kind } });
+    await fill();
+    await fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    await screen.findByRole('button', { name: 'Connection verified' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save and scan' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/connectors', expect.objectContaining({ method: 'POST' })));
+    return bodyOf(fetchMock.mock.calls.find((call) => call[0] === '/api/connectors')?.[1]);
+  }
+
+  it('posts nginx config with path mappings', async () => {
+    const body = await createBody('nginx', async () => {
+      await fireEvent.input(screen.getByLabelText('Config path'), { target: { value: ' /nginx ' } });
+      await fireEvent.input(screen.getByLabelText('Path mappings, one per line'), { target: { value: ' /etc/nginx=/nginx \n\n' } });
+      await fireEvent.input(screen.getByLabelText('Host address or name'), { target: { value: '192.0.2.10' } });
+      await fireEvent.input(screen.getByLabelText('Base domain'), { target: { value: 'example.com' } });
+    });
+    expect(body.kind).toBe('nginx');
+    expect(body.config).toEqual({ path: '/nginx', path_map: ['/etc/nginx=/nginx'], host: '192.0.2.10', base_domain: 'example.com' });
+  });
+
+  it('posts only the active Tailscale credential', async () => {
+    const body = await createBody('tailscale', async () => {
+      await fireEvent.input(screen.getByLabelText('OAuth client ID'), { target: { value: 'client-id' } });
+      await fireEvent.input(screen.getByLabelText('OAuth client secret'), { target: { value: 'client-secret' } });
+      await fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'token' } });
+      await fireEvent.input(screen.getByLabelText('API access token'), { target: { value: 'api-token' } });
+      await fireEvent.input(screen.getByLabelText('Tailnet'), { target: { value: '' } });
+    });
+    expect(body.kind).toBe('tailscale');
+    expect(body.config).toEqual({ tailnet: '-', api_key: 'api-token' });
   });
 
   it('enables save only after the current settings pass a test', async () => {

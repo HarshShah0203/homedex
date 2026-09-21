@@ -37,7 +37,7 @@ If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose.
 
 The UI is reachable from this machine only. To open it from other machines on your LAN, start it with `HOMEDEX_BIND=0.0.0.0 docker compose up -d --build` and finish the setup wizard straight away: until an admin password exists, whoever reaches the page first sets it.
 
-Prefer automation? `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, SSH hosts, TLS, RDAP, and remote Docker sources — all of which can also be added in the UI under **Sources**.
+Prefer automation? `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, nginx config files, SSH hosts, Tailscale, TLS, RDAP, and remote Docker sources — all of which can also be added in the UI under **Sources**.
 
 ### Why the socket proxy matters
 
@@ -62,8 +62,9 @@ It seeds the real SQLite schema and API with 3 hosts, 12 services, 16 port alloc
 | Area | Current behavior |
 |---|---|
 | Docker | Discovers host facts, all containers, Compose metadata, image/tag/digest, state/health, ports, networks, aliases, and labels via Unix, TCP/TLS, or SSH endpoints; Podman works through its Docker-compatible API |
-| Reverse proxies | Reads Traefik HTTP API, Caddy admin config, and Nginx Proxy Manager proxy-host/certificate APIs |
+| Reverse proxies | Reads Traefik HTTP API, Caddy admin config, Nginx Proxy Manager proxy-host/certificate APIs, and plain nginx or SWAG config files from a read-only mount (server blocks, includes, `set` variables, upstream groups) |
 | SSH hosts | Agentless collector for hosts without an exposed Docker API: container facts via `docker ps` over SSH exec, listening-port facts via `ss` on any Linux host, key-only auth with pinned host-key fingerprints |
+| Tailscale | Read-only device list from the Tailscale API (OAuth client with `devices:core:read`, or an API access token): hostnames, tailnet IPs, MagicDNS names, OS, and last seen; routes to tailnet names resolve to the service on the same machine |
 | Route resolution | Joins upstreams to container network IPs, names/aliases, or host-published ports; unresolved routes are marked broken |
 | Expiry data | Probes explicit TLS targets and queries explicit registrable domains through RDAP connectors |
 | Inventory | Services, hosts, ports, routes, certificates, domains, connector status, scan history, and changes in SQLite |

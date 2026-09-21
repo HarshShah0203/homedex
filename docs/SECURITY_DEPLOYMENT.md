@@ -53,7 +53,10 @@ Allow Homedex egress only to endpoints it needs:
 - configured Traefik, Caddy, and NPM APIs;
 - configured Docker SSH hosts on TCP 22 when that connector mode is used;
 - configured TLS targets;
-- IANA and registry RDAP endpoints if RDAP is enabled.
+- IANA and registry RDAP endpoints if RDAP is enabled;
+- `api.tailscale.com` over HTTPS if the Tailscale connector is enabled.
+
+The nginx connector needs no egress at all, only a read-only mount of the nginx configuration.
 
 Do not expose Docker TCP 2375, Caddy 2019, Traefik's unauthenticated dashboard/API, or NPM's admin API to the public internet for Homedex. Use internal networks, firewall allowlists, private overlays, or mTLS as supported by the upstream.
 

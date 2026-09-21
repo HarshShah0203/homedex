@@ -13,6 +13,8 @@ The socket proxy narrows the API surface; it does not make the Docker daemon or 
 - Docker discovery calls only version, info, container list, and container inspect operations. There are no container lifecycle or deployment calls.
 - Container environment variables are absent from the snapshot model and are never read. Docker labels are stored as observed metadata and can themselves contain secrets; avoid secret-bearing labels.
 - Traefik and Caddy connectors issue GET requests. Nginx Proxy Manager uses its token-authentication POST, then GETs proxy hosts and certificates; it does not edit NPM configuration.
+- The nginx connector only reads files: the entry config and files reached through `include`, confined to the mounted paths. It never opens certificates, keys or password files and makes no network connections.
+- The Tailscale connector exchanges an OAuth client for a `devices:core:read` token (or uses an API access token) and GETs the device list with default fields only. It never reads node or machine keys, owner emails or connectivity endpoints, and does not follow redirects.
 - Connector configuration is authenticated-encrypted with NaCl secretbox before SQLite persistence. The key is either `/data/instance.key` (created mode `0600`) or the externally supplied `HOMEDEX_SECRET`.
 - Export sanitization masks secret-like label keys/values and supports domain/external-IP masking. Read-only shares always omit private notes, custom fields, and labels; redaction and share-scope tests block CI.
 - Admin passwords are stored as Argon2id hashes. Browser sessions use an HttpOnly, SameSite=Lax cookie; state-changing authenticated API requests require the session CSRF token. Login attempts are rate-limited.

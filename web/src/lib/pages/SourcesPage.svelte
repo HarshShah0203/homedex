@@ -20,7 +20,9 @@
     { kind: 'traefik', label: 'Traefik', name: 'Traefik', schedule: 15 },
     { kind: 'caddy', label: 'Caddy', name: 'Caddy', schedule: 15 },
     { kind: 'npm', label: 'Nginx Proxy Manager', name: 'Nginx Proxy Manager', schedule: 15 },
+    { kind: 'nginx', label: 'nginx (config files)', name: 'nginx', schedule: 15 },
     { kind: 'ssh', label: 'SSH host', name: 'SSH host', schedule: 15 },
+    { kind: 'tailscale', label: 'Tailscale', name: 'Tailscale', schedule: 15 },
     { kind: 'tlsprobe', label: 'TLS probe', name: 'TLS probe', schedule: 1440 },
     { kind: 'rdap', label: 'RDAP domains', name: 'RDAP domains', schedule: 1440 }
   ];
@@ -50,6 +52,14 @@
   let fSshKey = $state('');
   let fSshPassphrase = $state('');
   let fSshFingerprint = $state('');
+  let fNginxPath = $state('');
+  let fNginxMap = $state('');
+  let fNginxBase = $state('');
+  let fTsAuth = $state<'oauth' | 'token'>('oauth');
+  let fTsTailnet = $state('-');
+  let fTsClientID = $state('');
+  let fTsClientSecret = $state('');
+  let fTsApiKey = $state('');
 
   function splitLines(value: string): string[] {
     return value.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -76,6 +86,16 @@
           host_key_sha256: fSshFingerprint.trim(),
           host_name: fHostName.trim()
         };
+      case 'nginx':
+        return { path: fNginxPath.trim(), path_map: splitLines(fNginxMap), host: fHostAddress.trim(), base_domain: fNginxBase.trim() };
+      case 'tailscale': {
+        // Only the active credential is sent, so switching methods never
+        // leaves a stale secret in the stored config.
+        const tailnet = fTsTailnet.trim() || '-';
+        return fTsAuth === 'oauth'
+          ? { tailnet, oauth_client_id: fTsClientID.trim(), oauth_client_secret: fTsClientSecret.trim() }
+          : { tailnet, api_key: fTsApiKey.trim() };
+      }
       default:
         return { endpoint: fEndpoint.trim(), host_name: fHostName.trim(), host_address: fHostAddress.trim() };
     }
@@ -174,6 +194,14 @@
     fSshKey = '';
     fSshPassphrase = '';
     fSshFingerprint = '';
+    fNginxPath = '';
+    fNginxMap = '';
+    fNginxBase = '';
+    fTsAuth = 'oauth';
+    fTsTailnet = '-';
+    fTsClientID = '';
+    fTsClientSecret = '';
+    fTsApiKey = '';
   }
 
   function armDelete(id: number) {
@@ -316,6 +344,27 @@
             <label class="field-label">Key passphrase <input type="password" bind:value={fSshPassphrase} placeholder="Optional" /></label>
             <label class="field-label">Host key fingerprint <input bind:value={fSshFingerprint} placeholder="Test connection shows it" /></label>
             <label class="field-label">Host name override <input bind:value={fHostName} placeholder="Optional" /></label>
+          {:else if addKind === 'nginx'}
+            <label class="field-label">Config path <input bind:value={fNginxPath} placeholder="/etc/nginx" /></label>
+            <label class="field-label">Path mappings, one per line <textarea bind:value={fNginxMap} rows="2" placeholder="/config/nginx=/nginx"></textarea></label>
+            <label class="field-label">Host address or name <input bind:value={fHostAddress} placeholder="Optional" /></label>
+            <label class="field-label">Base domain <input bind:value={fNginxBase} placeholder="Optional, e.g. example.com" /></label>
+            <small class="field-help">Mount nginx's config read-only into the Homedex container. nginx itself does not need to be reachable.</small>
+          {:else if addKind === 'tailscale'}
+            <label class="field-label">Credential
+              <select bind:value={fTsAuth}>
+                <option value="oauth">OAuth client (recommended)</option>
+                <option value="token">API access token</option>
+              </select>
+            </label>
+            {#if fTsAuth === 'oauth'}
+              <label class="field-label">OAuth client ID <input bind:value={fTsClientID} /></label>
+              <label class="field-label">OAuth client secret <input type="password" bind:value={fTsClientSecret} /></label>
+            {:else}
+              <label class="field-label">API access token <input type="password" bind:value={fTsApiKey} /></label>
+            {/if}
+            <label class="field-label">Tailnet <input bind:value={fTsTailnet} placeholder="-" /></label>
+            <small class="field-help">Create an OAuth client with only Devices → Core → Read. An API access token acts with every permission of the user who created it and expires within 90 days.</small>
           {/if}
           <label class="field-label">Schedule, minutes <input type="number" min="1" bind:value={addSchedule} /></label>
           <div class="form-actions">

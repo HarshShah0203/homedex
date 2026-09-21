@@ -1,6 +1,6 @@
 export type EntityType = 'service' | 'host' | 'route' | 'port' | 'expiry' | 'change';
 export type Service = { id: number; name: string; state: string; host: string; host_id: number | null; stack: string; image: string; tag: string; ports: string; route: string; last_seen: string; uptime?: string };
-export type Host = { id: number; name: string; kind: string; address: string; os: string; arch: string; state: string; services?: number; ports?: number; last_seen?: string };
+export type Host = { id: number; name: string; kind: string; address: string; os: string; arch: string; state: string; services?: number; ports?: number; last_seen?: string; aliases?: string[]; reported_last_seen?: string | null };
 export type Port = { id: number; service_id: number; service: string; host_id: number | null; host: string; number: number; protocol: string; published: boolean; host_ip: string; container_port: number; source: string };
 export type Route = { id: number; proxy_id?: number | null; proxy: string; domain: string; path_prefix: string; upstream_host: string; upstream_port: number | null; resolved_service_id?: number | null; service: string; resolve_confidence: string; tls: boolean; status: string; state: string; cert_expires_at?: string | null };
 export type Expiry = { entity_type: string; id: number; name: string; kind: string; type: string; authority: string; expires_at: string | null; expires: string | null; days_remaining: number | null; days: number | null; status: string; checked_at: string; source: string; state: string };

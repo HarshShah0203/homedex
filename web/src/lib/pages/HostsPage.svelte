@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createManualEntity, type Inventory } from '../api';
   import PageHead from '../PageHead.svelte';
-  import { plural } from '../time';
+  import { plural, relativeTime } from '../time';
   import HostInspector from '../HostInspector.svelte';
   import { navigate } from '../router';
 
@@ -70,7 +70,9 @@
       {#each hosts as host}
         <article class:selected={host.id === selectedID} class="host-record" data-component-id={`host-record-${host.name}`}>
           <header><h2>{host.name}</h2><span class="status ok">Observed</span></header>
-          <p class="address">{host.address} · {host.os} · {host.arch}</p>
+          <p class="address">{[host.address, host.os, host.arch].filter(Boolean).join(' · ')}</p>
+          {#if host.aliases?.length}<p class="address mono">{host.aliases.join(' · ')}</p>{/if}
+          {#if host.reported_last_seen}<small>{host.kind === 'tailscale' ? 'Last seen on tailnet' : 'Reported last seen'} {relativeTime(host.reported_last_seen)}</small>{/if}
           <dl><div><dt>Services</dt><dd>{host.services ?? countServices(host.name)}</dd></div><div><dt>Ports</dt><dd>{host.ports ?? countPorts(host.name)}</dd></div><div><dt>Routes</dt><dd>{countRoutes(host.name)}</dd></div></dl>
           <button class="quiet-button" onclick={() => navigate(`/hosts/${host.id}`)}>{host.id === selectedID ? 'Inspector open' : 'Open connected records'}</button>
         </article>

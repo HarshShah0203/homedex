@@ -92,6 +92,43 @@ Troubleshooting:
 - **"that is a public key"** — paste the private key file (`~/.ssh/id_ed25519`), not `id_ed25519.pub`.
 - Keys pasted with surrounding blank lines or editor indentation are handled; a stray value autofilled into the passphrase field by a browser is ignored for unencrypted keys.
 
+## Tailscale
+
+Reads your tailnet's device list from the Tailscale API. Each device becomes a host of kind `tailscale`: its name is the OS hostname, its address the tailnet IPv4, and its aliases the IPv6 address, the MagicDNS name and the MagicDNS short name. The device's own "last seen on tailnet" time is shown on the Hosts page; it changes on every poll, so it never produces a change-feed entry. Devices removed from the tailnet go gone like any other host.
+
+Only the default device fields are requested. Node keys, machine keys, owners' email addresses and connectivity endpoints are never read.
+
+**Routes over the tailnet.** A proxy upstream written as a tailnet IP, MagicDNS name or short name resolves, at medium confidence, to the service publishing that port on the same machine as seen by the Docker or SSH connector. The link needs exactly one Docker, SSH or manual host with the same short hostname, claimed by exactly one tailnet device. If two hosts or two devices share the name, Homedex does not guess: give the machines distinct names, or remove stale devices from the tailnet. A proxy whose URL is a tailnet name is linked to that machine on its next scan.
+
+Recommended config, an OAuth client:
+
+```json
+{
+  "tailnet": "-",
+  "oauth_client_id": "replace-with-oauth-client-id",
+  "oauth_client_secret": "replace-with-oauth-client-secret"
+}
+```
+
+Create it in the Tailscale admin console under **Settings → Trust credentials (OAuth clients)** with a single scope, **Devices → Core → Read**. Homedex exchanges it for a short-lived token at `POST /api/v2/oauth/token` (authentication only, not a write), requesting `devices:core:read` every time, and holds the token in memory.
+
+The simple alternative is an API access token:
+
+```json
+{ "tailnet": "-", "api_key": "replace-with-api-access-token" }
+```
+
+An access token acts with every permission of the user who created it and expires within 90 days, so prefer the OAuth client.
+
+`tailnet` `"-"` means the credential's own tailnet. Secrets are sealed with the instance key like every connector secret, never returned by the API, and never included in exports or error messages. Redirects are not followed. The only egress needed is HTTPS to `api.tailscale.com`.
+
+Troubleshooting:
+
+- **401** — the client secret or token is wrong, revoked or expired.
+- **403** — the OAuth client is missing the Devices → Core → Read scope.
+- **404** — the tailnet name is wrong; use `-`.
+- **"that is an OAuth client secret"** or **"that is an auth key"** — the value was pasted into the wrong field; auth keys (`tskey-auth-…`) add devices and cannot read the API.
+
 ## Traefik
 
 Config keys:
@@ -137,6 +174,60 @@ Config:
 Homedex authenticates with `POST /api/tokens`, caches the returned JWT, refreshes it once on `401`, and GETs `/api/nginx/proxy-hosts` plus `/api/nginx/certificates`. It does not create or modify NPM objects.
 
 Use a dedicated account and restrict the NPM API network path. NPM role granularity varies by version; verify the effective permissions in your installation rather than assuming the account is enforced read-only.
+
+## nginx (config files)
+
+Plain nginx and linuxserver SWAG have no admin API, so Homedex reads their configuration files from a read-only mount. nginx itself does not need to be reachable, and the connector makes no network connections.
+
+Config:
+
+```json
+{
+  "path": "/etc/nginx",
+  "path_map": [],
+  "host": "",
+  "base_domain": ""
+}
+```
+
+- **`path`** (required) — where the config is mounted inside the Homedex container: the main `nginx.conf`, or a directory. For a directory Homedex reads `nginx.conf` if present, otherwise every `*.conf`, otherwise every regular file (so a bare `sites-enabled` works).
+- **`path_map`** — `NGINX_PATH=HOMEDEX_PATH` entries for when the files are mounted somewhere other than where nginx sees them. Absolute `include` paths and absolute symlink targets are rewritten through the longest matching prefix.
+- **`host`** — the name or address of the machine nginx runs on. Optional; it links the proxy to that host so `localhost` and published-port upstreams resolve on the right machine.
+- **`base_domain`** — optional; names catch-all server blocks and completes SWAG-style `name.*` server names.
+
+Mount the config read-only. Examples:
+
+```yaml
+# Debian/Ubuntu nginx, same paths inside the container
+services:
+  homedex:
+    volumes:
+      - /etc/nginx:/etc/nginx:ro
+# config: {"path": "/etc/nginx"}
+
+# SWAG: mount only the nginx directory
+      - ./swag/config/nginx:/config/nginx:ro
+# config: {"path": "/config/nginx", "host": "swag", "base_domain": "example.com"}
+
+# Mounted elsewhere: map nginx's own paths onto the mount
+      - /etc/nginx:/nginx:ro
+# config: {"path": "/nginx", "path_map": ["/etc/nginx=/nginx"]}
+```
+
+What it reads: the entry config and anything reached through `include` (globs expanded in sorted order, relative paths resolved against the main config's directory). Symlinks such as `sites-enabled` are followed only when they resolve inside a mounted path. It never opens certificates, keys, htpasswd files or logs, and it never stores raw configuration.
+
+What it extracts, per `server` block and `location`:
+
+- `server_name` values, wildcards kept; `_`, empty and regex names are skipped.
+- TLS from `listen ... ssl` / `quic` or legacy `ssl on`.
+- `proxy_pass` upstreams, with `set $var ...` variables substituted (server scope, then location scope), as SWAG proxy-confs use them. `upstream {}` groups produce one route per member. `unix:` sockets are skipped. An upstream that still contains an unresolved variable is shown verbatim and marked broken rather than hidden.
+
+A parse error fails the scan and keeps the previous inventory. Reads are bounded (file size, file count, total bytes, include depth), include cycles are detected, and anything resolving outside the mounted paths is skipped.
+
+Troubleshooting:
+
+- **permission denied** — the files must be readable by the Homedex user (UID 65532).
+- **no server blocks found** — the includes probably point at paths that are not mounted; mount the config at the same paths nginx uses, or add a `path_map` entry.
 
 ## TLS probe
 
