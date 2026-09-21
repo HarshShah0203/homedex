@@ -603,6 +603,7 @@ func TestDecodeValidation(t *testing.T) {
 		errScheme       = "base_url must be an http(s) URL such as https://api.tailscale.com"
 		errBaseParts    = "base_url must not contain credentials, a path, a query, or a fragment"
 		errTailnet      = `tailnet must be "-" or a tailnet name or ID such as example.com`
+		errCleartext    = "base_url must use https unless its host is loopback (127.0.0.1, ::1 or localhost): http would send credentials in cleartext"
 	)
 	withKey := func(kv ...string) connectors.Config { return cfg(append([]string{"api_key", testAPIKey}, kv...)...) }
 	withOAuth := func(secret string) connectors.Config {
@@ -631,6 +632,11 @@ func TestDecodeValidation(t *testing.T) {
 		{"base_url with a query", withKey("base_url", "https://api.example.com?key=queryVALUE"), errBaseParts, "queryVALUE"},
 		{"base_url with an empty query", withKey("base_url", "https://api.example.com/?"), errBaseParts, ""},
 		{"base_url with a fragment", withKey("base_url", "https://api.example.com#fragVALUE"), errBaseParts, "fragVALUE"},
+		{"http base_url to a public host", withKey("base_url", "http://api.tailscale.com"), errCleartext, "api.tailscale.com"},
+		{"http base_url to a LAN address", withKey("base_url", "http://10.0.0.5:8080"), errCleartext, "10.0.0.5"},
+		{"http base_url to a tailnet address", withKey("base_url", "http://100.64.0.1"), errCleartext, "100.64.0.1"},
+		{"http base_url to a localhost lookalike", withKey("base_url", "http://localhost.example.com"), errCleartext, "example.com"},
+		{"http OAuth base_url", cfg("oauth_client_id", testClientID, "oauth_client_secret", testClientSecret, "base_url", "http://api.example.com"), errCleartext, "clientSECRETvalue"},
 		{"tailnet with a slash", withKey("tailnet", "example.com/../keys"), errTailnet, ""},
 		{"tailnet with a backslash", withKey("tailnet", `example\com`), errTailnet, ""},
 		{"tailnet with a question mark", withKey("tailnet", "example.com?fields=x"), errTailnet, ""},
@@ -692,8 +698,15 @@ func TestDecodeDefaultsAndNormalizes(t *testing.T) {
 		cfg("api_key", testAPIKey, "tailnet", s("t", 255)),
 		cfg("api_key", "tskey-api-"+s("K", 502)),
 		cfg("oauth_client_id", s("k", 256), "oauth_client_secret", "tskey-client-"+s("S", 499)),
-		cfg("api_key", testAPIKey, "base_url", "http://127.0.0.1:8080"),
 		cfg("api_key", testAPIKey, "base_url", "https://[fd7a:115c:a1e0::1]"),
+		cfg("api_key", testAPIKey, "base_url", "https://10.0.0.5:8443"),
+		// http is for local mocks only.
+		cfg("api_key", testAPIKey, "base_url", "http://127.0.0.1:8080"),
+		cfg("api_key", testAPIKey, "base_url", "http://127.0.0.2"),
+		cfg("api_key", testAPIKey, "base_url", "http://[::1]:8080"),
+		cfg("api_key", testAPIKey, "base_url", "http://[::ffff:127.0.0.1]:8080"),
+		cfg("api_key", testAPIKey, "base_url", "http://localhost:8080"),
+		cfg("api_key", testAPIKey, "base_url", "HTTP://LocalHost"),
 	} {
 		if _, err := decode(raw); err != nil {
 			t.Errorf("limit value refused: %v", err)

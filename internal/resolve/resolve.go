@@ -270,45 +270,71 @@ func addressedBy(h Host, host string) bool {
 }
 
 // linkMachines pairs each tailnet device with the machine another connector
-// (Docker, SSH, manual) reports under the same short host name. It makes no
-// guesses: ambiguity on either side -- two machines with that name, or two
-// devices claiming one machine -- leaves the device unlinked.
+// (Docker, SSH, manual) reports for it. An address is the strongest evidence:
+// a machine reached at one of the device's IPs or MagicDNS names. Only a
+// device with no such machine falls back to a unique short host name, since a
+// default name like raspberrypi can belong to unrelated machines. It makes no
+// guesses: two candidate machines, or two devices claiming one machine on
+// equal evidence, leave the device unlinked; a claim by address outranks a
+// claim by name.
 func linkMachines(hosts []Host) map[EntityRef]EntityRef {
+	byAddress := map[string][]EntityRef{}
 	byName := map[string][]EntityRef{}
 	for _, h := range hosts {
 		if h.Kind == domain.HostKindTailscale {
 			continue
 		}
+		if addr := canonicalHost(h.Address); addr != "" {
+			byAddress[addr] = append(byAddress[addr], h.Ref)
+		}
 		if name := shortName(h.Name); name != "" {
 			byName[name] = append(byName[name], h.Ref)
 		}
 	}
-	links := map[EntityRef]EntityRef{}
-	claims := map[EntityRef]int{}
+	type claim struct {
+		machine   EntityRef
+		byAddress bool
+	}
+	devices := map[EntityRef]claim{}
+	claims := map[claim]int{}
 	for _, h := range hosts {
 		if h.Kind != domain.HostKindTailscale {
 			continue
 		}
-		matches := map[EntityRef]bool{}
-		for _, name := range append([]string{h.Name}, h.Aliases...) {
-			for _, ref := range byName[shortName(name)] {
-				matches[ref] = true
-			}
+		matches := candidateMachines(append([]string{h.Address}, h.Aliases...), byAddress, canonicalHost)
+		viaAddress := len(matches) > 0
+		if !viaAddress {
+			matches = candidateMachines(append([]string{h.Name}, h.Aliases...), byName, shortName)
 		}
 		if len(matches) != 1 {
 			continue
 		}
 		for machine := range matches {
-			links[h.Ref] = machine
-			claims[machine]++
+			c := claim{machine, viaAddress}
+			devices[h.Ref] = c
+			claims[c]++
 		}
 	}
-	for device, machine := range links {
-		if claims[machine] > 1 {
-			delete(links, device)
+	links := map[EntityRef]EntityRef{}
+	for device, c := range devices {
+		if claims[c] > 1 || (!c.byAddress && claims[claim{c.machine, true}] > 0) {
+			continue
 		}
+		links[device] = c.machine
 	}
 	return links
+}
+
+func candidateMachines(ids []string, index map[string][]EntityRef, key func(string) string) map[EntityRef]bool {
+	matches := map[EntityRef]bool{}
+	for _, id := range ids {
+		if k := key(id); k != "" {
+			for _, ref := range index[k] {
+				matches[ref] = true
+			}
+		}
+	}
+	return matches
 }
 
 // MachineHostIDs returns the ids of the hosts a proxy URL's host name refers

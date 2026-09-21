@@ -115,7 +115,20 @@ func normalizeBaseURL(s string) (string, error) {
 	if u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return "", errors.New("base_url must not contain credentials, a path, a query, or a fragment")
 	}
+	// http exists for local mocks; anywhere else a typo would put the client
+	// secret or API token on the wire in cleartext.
+	if u.Scheme == "http" && !loopbackHost(u.Hostname()) {
+		return "", errors.New("base_url must use https unless its host is loopback (127.0.0.1, ::1 or localhost): http would send credentials in cleartext")
+	}
 	return u.Scheme + "://" + u.Host, nil
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
+		return true
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && a.Unmap().IsLoopback()
 }
 
 func checkCredentials(x config) error {
