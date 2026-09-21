@@ -1,0 +1,15 @@
+upstream docs_backend {
+	server 10.0.0.21:8080 weight=2;
+	server 10.0.0.22;
+	server unix:/run/docs/docs.sock;
+	server 10.0.0.23:8080 down;
+}
+
+server {
+	listen 80;
+	server_name docs.example.com www.docs.example.com;
+
+	location / {
+		proxy_pass http://docs_backend;
+	}
+}

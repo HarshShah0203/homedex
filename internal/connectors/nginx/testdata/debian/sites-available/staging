@@ -1,0 +1,8 @@
+# Available but not enabled: never read.
+server {
+	listen 80;
+	server_name staging.example.com;
+	location / {
+		proxy_pass http://10.0.0.40:8080;
+	}
+}
