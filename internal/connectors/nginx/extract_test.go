@@ -36,7 +36,7 @@ func upstreams(rs []domain.Route) map[string]string {
 
 func serversOf(t *testing.T, conf string) []server {
 	t.Helper()
-	ss, err := collect(mustParse(t, conf), defaultLimits())
+	ss, err := collect(context.Background(), mustParse(t, conf), defaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestServerNames(t *testing.T) {
 	want := [][]string{
 		{"a.example.com", "*.wild.example.com", "dot.example.com", "*.dot.example.com"},
 		{"first.example.com", "second.example.com"},
-		{"_"},
+		nil,
 		{"_"},
 	}
 	for i, s := range ss {
@@ -227,8 +227,8 @@ server {
 		"nginx:loc.example.com:/v6":         "fd00::1:8080",
 		"nginx:loc.example.com:/v6bare":     "fd00::2:443",
 		"nginx:loc.example.com:/user":       "creds:9000",
-		"nginx:loc.example.com:/grp:0":      "10.0.0.31:81",
-		"nginx:loc.example.com:/grp:1":      "10.0.0.32:82",
+		"nginx:loc.example.com:/grp#0":      "10.0.0.31:81",
+		"nginx:loc.example.com:/grp#1":      "10.0.0.32:82",
 		"nginx:loc.example.com:/grpport":    "MyGroup:9999",
 		"nginx:loc.example.com:/badport":    "bad:0",
 	}
@@ -325,5 +325,57 @@ func TestCreationOrderDoesNotChangeOutput(t *testing.T) {
 	b := scan(t, New(), map[string]any{"path": build([]string{files[2], files[1], files[0]})})
 	if !reflect.DeepEqual(a, b) || len(a) != 3 || a[0].Key != "nginx:same.example.com:/" || a[0].UpstreamHost != "a" {
 		t.Fatalf("a %#v\nb %#v", a, b)
+	}
+}
+
+// Only an explicit "server_name _" is the catch-all that base_domain names. A
+// server whose names were all dropped (none, regex, IP, $var) is unnamed, not
+// the default site, and must not borrow base_domain or the "_" key.
+func TestServersWithoutUsableNamesAreSkipped(t *testing.T) {
+	conf := `http {
+	server { listen 8080; location / { proxy_pass http://portonly:3000; } }
+	server { server_name "~^(?<app>.+)\.example\.com$"; location / { proxy_pass http://regex:1; } }
+	server { server_name 192.0.2.5 $hostname ""; location / { proxy_pass http://ipname:1; } }
+	server { listen 80; server_name _; location / { proxy_pass http://real:1; } }
+}`
+	routes := routesOf(t, conf, map[string]any{"base_domain": "example.com"})
+	want := []domain.Route{{Key: "nginx:_:/", Domain: "example.com", PathPrefix: "/", UpstreamHost: "real", UpstreamPort: 1, Status: "unknown"}}
+	if !reflect.DeepEqual(routes, want) {
+		t.Fatalf("got %#v", routes)
+	}
+	if routes := routesOf(t, conf, nil); len(routes) != 0 {
+		t.Fatalf("without base_domain: %#v", routes)
+	}
+}
+
+// A twin's :<port>:<n> suffix and an upstream member's index used to share
+// one namespace, so "/:80:2" could be both and one route silently vanished.
+func TestTwinAndMemberSuffixesStayDistinct(t *testing.T) {
+	got := upstreams(routesOf(t, `http {
+	upstream three { server 10.0.0.1:1; server 10.0.0.2:2; server 10.0.0.3:3; }
+	server { listen 443 ssl; server_name c.example.com; location / { proxy_pass http://tls:1; } }
+	server { listen 80; server_name c.example.com; location / { proxy_pass http://three; } }
+	server { listen 80; server_name c.example.com; location / { proxy_pass http://other:1; } }
+}`, nil))
+	want := map[string]string{
+		"nginx:c.example.com:/":      "tls:1+tls",
+		"nginx:c.example.com:/:80#0": "10.0.0.1:1",
+		"nginx:c.example.com:/:80#1": "10.0.0.2:2",
+		"nginx:c.example.com:/:80#2": "10.0.0.3:3",
+		"nginx:c.example.com:/:80:2": "other:1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestRemainingKeyCollisionFails(t *testing.T) {
+	err := scanErr(t, `http {
+	server { listen 443 ssl; server_name c.example.com; location / { proxy_pass http://a:1; } }
+	server { listen 80; server_name c.example.com; location / { proxy_pass http://b:1; } }
+	server { listen 443 ssl; server_name c.example.com; location /:80 { proxy_pass http://c:1; } }
+}`)
+	if err == nil || err.Error() != "nginx: nginx.conf:4: route key collides with the route from nginx.conf:3" {
+		t.Fatalf("got %v", err)
 	}
 }

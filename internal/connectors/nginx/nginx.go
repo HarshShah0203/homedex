@@ -27,7 +27,10 @@ type Config struct {
 	BaseDomain string   `json:"base_domain"` // names SWAG's "app.*" and catch-all servers
 }
 
-// limits bound the work one scan can do on an arbitrary mounted tree.
+// limits bound the work one scan can do on an arbitrary mounted tree. The
+// input caps alone are not enough: names x locations and repeated variable
+// copies multiply a small file, so the output is capped too. Hitting any cap
+// fails the scan; nothing is silently truncated.
 type limits struct {
 	fileBytes, totalBytes int64
 	files                 int
@@ -38,6 +41,10 @@ type limits struct {
 	tokenBytes            int
 	symlinkHops           int
 	varExpansion          int
+	names                 int   // per server block
+	members               int   // per upstream group
+	routes                int   // per scan
+	expandBytes           int64 // all variable expansions in a scan
 }
 
 func defaultLimits() limits {
@@ -52,6 +59,10 @@ func defaultLimits() limits {
 		tokenBytes:   4096,
 		symlinkHops:  40,
 		varExpansion: 4096,
+		names:        256,
+		members:      256,
+		routes:       20000,
+		expandBytes:  1 << 20,
 	}
 }
 
@@ -155,26 +166,28 @@ func decode(raw connectors.Config) (settings, error) {
 	return s, nil
 }
 
-func (c *Connector) servers(ctx context.Context, raw connectors.Config) (settings, []server, error) {
+// routes is the whole scan; Validate runs it too, so a config that would fail
+// a scan never passes the Test button.
+func (c *Connector) routes(ctx context.Context, raw connectors.Config) ([]domain.Route, error) {
 	s, err := decode(raw)
 	if err != nil {
-		return s, nil, err
+		return nil, err
 	}
 	lim := c.bounds()
 	l, tree, err := load(ctx, s, lim)
 	if err != nil {
-		return s, nil, err
+		return nil, err
 	}
-	servers, err := collect(tree, lim)
+	servers, err := collect(ctx, tree, lim)
 	if err != nil {
-		return s, nil, err
+		return nil, err
 	}
 	// An empty result from a broken mount must fail rather than mark every
 	// previously seen route as gone.
 	if len(servers) == 0 {
-		return s, nil, noServers(s.path, l.skipped)
+		return nil, noServers(s.path, l.skipped)
 	}
-	return s, servers, nil
+	return routes(ctx, servers, s.baseDomain, lim)
 }
 
 func noServers(path string, skipped []skip) error {
@@ -191,16 +204,16 @@ func noServers(path string, skipped []skip) error {
 }
 
 func (c *Connector) Validate(ctx context.Context, raw connectors.Config) error {
-	_, _, err := c.servers(ctx, raw)
+	_, err := c.routes(ctx, raw)
 	return err
 }
 
 func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Snapshot, error) {
-	s, servers, err := c.servers(ctx, raw)
+	rs, err := c.routes(ctx, raw)
 	if err != nil {
 		return domain.Snapshot{}, err
 	}
-	return domain.Snapshot{Routes: routes(servers, s.baseDomain)}, nil
+	return domain.Snapshot{Routes: rs}, nil
 }
 
 // ProxyEndpoint names the proxies row: file://<host><path>. A host that

@@ -24,7 +24,7 @@ func loadWith(t *testing.T, lim limits, kv map[string]any) (*loader, []*directiv
 // firstNames lists each server block's first server_name in tree order.
 func firstNames(t *testing.T, tree []*directive) []string {
 	t.Helper()
-	ss, err := collect(tree, defaultLimits())
+	ss, err := collect(context.Background(), tree, defaultLimits())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,5 +358,45 @@ func TestUnreadableFileNamesIt(t *testing.T) {
 	_, err := New().Scan(context.Background(), cfgOf(t, map[string]any{"path": root}))
 	if err == nil || !strings.Contains(err.Error(), "nginx: nginx.conf:2: cannot read a.conf: permission denied") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// nginx.conf that exists but cannot be used must fail, not fall back to the
+// sibling *.conf files nginx itself would never read.
+func TestUnusableNginxConfFails(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, root string)
+		want  string
+	}{
+		{"outside", func(t *testing.T, root string) {
+			if err := os.WriteFile(filepath.Join(filepath.Dir(root), "elsewhere.conf"), []byte("http {"+site("x.example.com")+"}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			symlink(t, "../elsewhere.conf", filepath.Join(root, "nginx.conf"))
+		}, "nginx: nginx.conf: outside the mounted paths"},
+		{"loop", func(t *testing.T, root string) { symlink(t, "nginx.conf", filepath.Join(root, "nginx.conf")) }, "nginx: nginx.conf: symlink loop"},
+		{"dangling", func(t *testing.T, root string) { symlink(t, "gone.conf", filepath.Join(root, "nginx.conf")) }, "nginx: nginx.conf: not found"},
+		{"directory", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, "nginx.conf"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}, "nginx: nginx.conf: not a regular file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "nginx")
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "sibling.conf"), []byte(site("sibling.example.com")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tc.setup(t, root)
+			_, err := New().Scan(context.Background(), cfgOf(t, map[string]any{"path": root}))
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("got %v, want %s", err, tc.want)
+			}
+		})
 	}
 }
