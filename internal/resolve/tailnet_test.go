@@ -70,6 +70,71 @@ func TestTailnetLinkRequiresUniqueMachine(t *testing.T) {
 	}
 }
 
+// addressInventory has an SSH machine whose address names the tailnet device
+// directly, each machine publishing 8080 with its own service.
+func addressInventory(sshAddress string, hosts ...Host) Inventory {
+	ssh := ref(3, "ssh:box")
+	return Inventory{
+		Hosts: append([]Host{{ID: 3, Ref: ssh, Kind: "ssh", Name: "storage-box", Address: sshAddress}}, hosts...),
+		Services: []Service{
+			service(3, "ssh:box:proc:app", ssh, "app"),
+			service(1, "container:app", dockerNAS, "app"),
+		},
+		Ports: []Port{
+			port(ref(3, "ssh:box:proc:app"), ssh, 8080, 8080, true),
+			port(ref(1, "container:app"), dockerNAS, 8080, 80, true),
+		},
+	}
+}
+
+func TestTailnetLinkPrefersAddress(t *testing.T) {
+	device := tailnetDevice(deviceNAS, 2, "NAS", "100.64.0.5", "fd7a:115c:a1e0::5", "nas.tail1234.ts.net", "nas")
+	resolved := func(inv Inventory, upstream string) string {
+		return Routes([]domain.Route{{UpstreamHost: upstream, UpstreamPort: 8080}}, inv)[0].ResolvedServiceKey
+	}
+	// The names differ, but the SSH host is reached at the device's tailnet IP,
+	// IPv6 spelling or MagicDNS name, so it is the same machine.
+	for _, addr := range []string{"100.64.0.5", "[fd7a:115c:a1e0:0:0:0:0:5]", "NAS.tail1234.ts.net."} {
+		inv := addressInventory(addr, device)
+		for _, upstream := range []string{"nas.tail1234.ts.net", "fd7a:115c:a1e0::5", "nas"} {
+			if got := resolved(inv, upstream); got != "ssh:box:proc:app" {
+				t.Errorf("ssh at %s: %s:8080 resolved to %q, want the SSH host's service", addr, upstream, got)
+			}
+		}
+	}
+	// A Docker host named nas is weaker evidence than the address: the device
+	// links to the SSH host, not to both and not to the namesake.
+	named := Host{ID: 1, Ref: dockerNAS, Kind: "docker", Name: "nas", Address: "10.0.0.2"}
+	inv := addressInventory("100.64.0.5", named, device)
+	if got := resolved(inv, "nas.tail1234.ts.net"); got != "ssh:box:proc:app" {
+		t.Errorf("address evidence lost to a name match: resolved to %q", got)
+	}
+	if ids := MachineHostIDs(inv.Hosts, "nas.tail1234.ts.net"); !reflect.DeepEqual(ids, []int64{3}) {
+		t.Errorf("MachineHostIDs = %v, want the address-linked SSH host [3]", ids)
+	}
+	// Two machines at the device's address is ambiguous, and does not fall
+	// back to the name match either.
+	twin := Host{ID: 4, Ref: ref(4, "manual:twin"), Kind: "manual", Name: "twin", Address: "100.64.0.5"}
+	if got := resolved(addressInventory("100.64.0.5", named, twin, device), "nas.tail1234.ts.net"); got != "" {
+		t.Errorf("two machines at one address linked: resolved to %q", got)
+	}
+	// A stale device that shares the hostname only claims the machine by name,
+	// so it cannot unlink the device the address identifies.
+	stale := tailnetDevice(ref(2, "tailscale:n2"), 5, "storage-box", "100.64.0.6", "storage-box.tail1234.ts.net", "storage-box")
+	inv = addressInventory("100.64.0.5", device, stale)
+	if got := resolved(inv, "nas.tail1234.ts.net"); got != "ssh:box:proc:app" {
+		t.Errorf("a name-only claim unlinked the address match: resolved to %q", got)
+	}
+	if got := resolved(inv, "storage-box.tail1234.ts.net"); got != "" {
+		t.Errorf("the stale device linked too: resolved to %q", got)
+	}
+	// Two devices both claiming the machine by address stay unlinked.
+	echo := tailnetDevice(ref(2, "tailscale:n3"), 6, "nas-echo", "100.64.0.7", "100.64.0.5")
+	if got := resolved(addressInventory("100.64.0.5", device, echo), "nas.tail1234.ts.net"); got != "" {
+		t.Errorf("two address claims linked: resolved to %q", got)
+	}
+}
+
 func TestMachineHostIDs(t *testing.T) {
 	hosts := append(tailnetInventory().Hosts,
 		tailnetDevice(ref(2, "tailscale:n3"), 3, "laptop", "100.64.0.9", "laptop.tail1234.ts.net", "laptop"),
