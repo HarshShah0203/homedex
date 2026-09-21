@@ -1,8 +1,8 @@
 package nginx
 
 import (
+	"context"
 	"fmt"
-	"maps"
 	"net"
 	"slices"
 	"sort"
@@ -33,6 +33,8 @@ type loc struct {
 	kind        int
 	internal    bool
 	path, label string
+	file        string
+	line        int
 	target      *target
 }
 
@@ -46,19 +48,26 @@ type server struct {
 }
 
 type extractor struct {
-	lim     limits
-	groups  map[string][]member
-	httpSSL bool
+	ctx      context.Context
+	lim      limits
+	groups   map[string][]member
+	httpSSL  bool
+	expanded int64
 }
 
 // collect finds every http-context server block. Upstream groups are gathered
 // first because proxy_pass may name a group defined later in the files.
-func collect(tree []*directive, lim limits) ([]server, error) {
-	x := &extractor{lim: lim, groups: map[string][]member{}}
+func collect(ctx context.Context, tree []*directive, lim limits) ([]server, error) {
+	x := &extractor{ctx: ctx, lim: lim, groups: map[string][]member{}}
 	var blocks []*directive
-	x.walk(tree, &blocks)
+	if err := x.walk(tree, &blocks); err != nil {
+		return nil, err
+	}
 	out := make([]server, 0, len(blocks))
 	for i, d := range blocks {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		s, err := x.server(d, i)
 		if err != nil {
 			return nil, err
@@ -70,29 +79,40 @@ func collect(tree []*directive, lim limits) ([]server, error) {
 
 // walk treats the top level as http context too, so fragment files (conf.d,
 // sites-enabled) mounted on their own still yield their servers.
-func (x *extractor) walk(ds []*directive, servers *[]*directive) {
+func (x *extractor) walk(ds []*directive, servers *[]*directive) error {
 	for _, d := range ds {
 		switch {
 		case d.name == "http" && d.isBlock:
-			x.walk(d.block, servers)
+			if err := x.walk(d.block, servers); err != nil {
+				return err
+			}
 		case d.name == "server" && d.isBlock:
 			*servers = append(*servers, d)
 		case d.name == "upstream" && d.isBlock && len(d.args) == 1:
 			name := strings.ToLower(d.args[0])
-			if _, ok := x.groups[name]; !ok {
-				x.groups[name] = members(d.block)
+			if _, ok := x.groups[name]; ok {
+				continue
 			}
+			ms, err := x.members(d)
+			if err != nil {
+				return err
+			}
+			x.groups[name] = ms
 		case d.name == "ssl" && len(d.args) == 1:
 			x.httpSSL = strings.EqualFold(d.args[0], "on")
 		}
 	}
+	return nil
 }
 
-func members(ds []*directive) []member {
+func (x *extractor) members(up *directive) ([]member, error) {
 	out := []member{}
-	for _, d := range ds {
+	for _, d := range up.block {
 		if d.name != "server" || d.isBlock || len(d.args) == 0 || slices.Contains(d.args[1:], "down") || hasPrefixFold(d.args[0], "unix:") {
 			continue
+		}
+		if len(out) == x.lim.members {
+			return nil, dirErr(up, fmt.Sprintf("more than %d servers in one upstream", x.lim.members))
 		}
 		host, port, explicit := splitHostPort(d.args[0])
 		if !explicit {
@@ -100,22 +120,27 @@ func members(ds []*directive) []member {
 		}
 		out = append(out, member{host, port})
 	}
-	return out
+	return out, nil
 }
 
 func (x *extractor) server(d *directive, ordinal int) (server, error) {
 	s := server{ordinal: ordinal, vars: map[string]string{}}
-	ssl, listened := x.httpSSL, false
+	ssl, listened, catchAll := x.httpSSL, false, false
 	seen := map[string]bool{}
 	for _, c := range d.block {
 		switch c.name {
 		case "server_name":
 			for _, a := range c.args {
+				catchAll = catchAll || strings.TrimSuffix(a, ".") == "_"
 				for _, n := range serverNames(a) {
-					if !seen[n] {
-						seen[n] = true
-						s.names = append(s.names, n)
+					if seen[n] {
+						continue
 					}
+					if len(s.names) == x.lim.names {
+						return s, dirErr(c, fmt.Sprintf("more than %d names in one server block", x.lim.names))
+					}
+					seen[n] = true
+					s.names = append(s.names, n)
 				}
 			}
 		case "listen":
@@ -144,7 +169,7 @@ func (x *extractor) server(d *directive, ordinal int) (server, error) {
 				ssl = strings.EqualFold(c.args[0], "on")
 			}
 		case "set":
-			if err := x.set(c, s.vars); err != nil {
+			if err := x.set(c, scope{own: s.vars}); err != nil {
 				return s, err
 			}
 		}
@@ -154,11 +179,27 @@ func (x *extractor) server(d *directive, ordinal int) (server, error) {
 	}
 	slices.Sort(s.ports)
 	s.tls = s.tls || ssl
-	if len(s.names) == 0 {
+	// Only an explicit "server_name _" is the catch-all base_domain names. A
+	// server whose names were all dropped (none, regex, IP, $var) keeps no
+	// name and yields no routes rather than posing as the default site.
+	if len(s.names) == 0 && catchAll {
 		s.names = []string{"_"}
 	}
 	err := x.locations(d.block, s.vars, &s.locs)
 	return s, err
+}
+
+// scope resolves a variable against a location's own sets, then its server's.
+// Keeping the two apart instead of copying the server's map into every
+// location keeps extraction linear in the size of the config.
+type scope struct{ own, server map[string]string }
+
+func (v scope) get(name string) (string, bool) {
+	if s, ok := v.own[name]; ok {
+		return s, true
+	}
+	s, ok := v.server[name]
+	return s, ok
 }
 
 // locations flattens nested locations. Each sees the server's sets plus its
@@ -168,11 +209,15 @@ func (x *extractor) locations(ds []*directive, serverVars map[string]string, out
 		if d.name != "location" || !d.isBlock {
 			continue
 		}
+		if err := x.ctx.Err(); err != nil {
+			return err
+		}
 		l, err := locationOf(d)
 		if err != nil {
 			return err
 		}
-		vars := maps.Clone(serverVars)
+		l.file, l.line = d.file, d.line
+		vars := scope{own: map[string]string{}, server: serverVars}
 		var pass *directive
 		for _, c := range d.block {
 			switch c.name {
@@ -234,16 +279,33 @@ func locationOf(d *directive) (loc, error) {
 	return loc{}, dirErr(d, "location expects 1 or 2 arguments")
 }
 
-func (x *extractor) set(d *directive, vars map[string]string) error {
+func (x *extractor) set(d *directive, vars scope) error {
 	if len(d.args) != 2 || !strings.HasPrefix(d.args[0], "$") {
 		return nil
 	}
-	v, ok := subst(d.args[1], vars, x.lim.varExpansion)
-	if !ok {
-		return dirErr(d, fmt.Sprintf("variable expansion longer than %d bytes", x.lim.varExpansion))
+	v, err := x.expand(d, d.args[1], vars)
+	if err != nil {
+		return err
 	}
-	vars[strings.ToLower(d.args[0][1:])] = v
+	vars.own[strings.ToLower(d.args[0][1:])] = v
 	return nil
+}
+
+// expand substitutes variables into s. Every expansion in a scan draws on one
+// budget, because a short config can otherwise copy one large value many
+// thousand times.
+func (x *extractor) expand(d *directive, s string, vars scope) (string, error) {
+	if !strings.Contains(s, "$") {
+		return s, nil
+	}
+	out, ok := subst(s, vars, x.lim.varExpansion)
+	if !ok {
+		return "", dirErr(d, fmt.Sprintf("variable expansion longer than %d bytes", x.lim.varExpansion))
+	}
+	if x.expanded += int64(len(out)); x.expanded > x.lim.expandBytes {
+		return "", dirErr(d, fmt.Sprintf("variable expansions exceed %d bytes in total", x.lim.expandBytes))
+	}
+	return out, nil
 }
 
 // runtimeVars carry the request path, never the upstream authority.
@@ -252,10 +314,10 @@ var runtimeVars = []string{"request_uri", "uri", "document_uri", "args", "query_
 // target reduces a proxy_pass to upstream host:port members. A host still
 // holding a $variable is kept verbatim with no port: the route stays visible
 // and resolves as broken, which says more than dropping it would.
-func (x *extractor) target(d *directive, vars map[string]string) (*target, error) {
-	s, ok := subst(d.args[0], vars, x.lim.varExpansion)
-	if !ok {
-		return nil, dirErr(d, fmt.Sprintf("variable expansion longer than %d bytes", x.lim.varExpansion))
+func (x *extractor) target(d *directive, vars scope) (*target, error) {
+	s, err := x.expand(d, d.args[0], vars)
+	if err != nil {
+		return nil, err
 	}
 	scheme, rest := "", s
 	if i := strings.Index(s, "://"); i >= 0 {
@@ -309,10 +371,7 @@ func cutRuntime(s string) string {
 }
 
 // subst expands $name and ${name} from vars; unknown variables stay verbatim.
-func subst(s string, vars map[string]string, max int) (string, bool) {
-	if !strings.Contains(s, "$") {
-		return s, len(s) <= max
-	}
+func subst(s string, vars scope, max int) (string, bool) {
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		name, end := varAt(s, i)
@@ -321,7 +380,7 @@ func subst(s string, vars map[string]string, max int) (string, bool) {
 			i++
 			continue
 		}
-		if v, ok := vars[strings.ToLower(name)]; ok {
+		if v, ok := vars.get(strings.ToLower(name)); ok {
 			b.WriteString(v)
 		} else {
 			b.WriteString(s[i:end])
@@ -450,20 +509,26 @@ func primary(l *loc) bool { return (l.kind == locPrefix || l.kind == locExact) &
 // a prefix or exact location under a shorter prefix with the same upstream
 // (SWAG's /radarr/api under /radarr), and regex, named or internal locations
 // whose upstream a plain location already reaches (SWAG's (/app)?/api).
-func kept(locs []loc) []*loc {
+func kept(ctx context.Context, locs []loc) ([]*loc, error) {
+	primaries := map[string][]int{}
+	for i := range locs {
+		if locs[i].target != nil && primary(&locs[i]) {
+			primaries[locs[i].target.id] = append(primaries[locs[i].target.id], i)
+		}
+	}
 	var out []*loc
 	for i := range locs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		l := &locs[i]
 		if l.target == nil {
 			continue
 		}
 		drop := false
-		for j := range locs {
+		for _, j := range primaries[l.target.id] {
 			p := &locs[j]
-			if j == i || p.target == nil || !primary(p) || p.target.id != l.target.id {
-				continue
-			}
-			if !primary(l) || p.kind == locPrefix && strings.HasPrefix(l.path, p.path) {
+			if j != i && (!primary(l) || p.kind == locPrefix && strings.HasPrefix(l.path, p.path)) {
 				drop = true
 				break
 			}
@@ -472,7 +537,7 @@ func kept(locs []loc) []*loc {
 			out = append(out, l)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func portSig(s *server) string {
@@ -505,17 +570,30 @@ type emit struct {
 	key    string
 }
 
+type keyed struct {
+	r domain.Route
+	l *loc
+}
+
 // routes keys each route on server_name and location only, never on an
 // address, port or file, so certbot's 80-to-443 edit or moving a server block
 // keeps its history. Twin server blocks for the same name are told apart by
-// their ports, with the TLS one keeping the plain key.
-func routes(servers []server, base string) []domain.Route {
+// their ports (":<ports>", then ":<n>"), with the TLS one keeping the plain
+// key; upstream group members get "#<i>" so the two suffixes cannot meet.
+func routes(ctx context.Context, servers []server, base string, lim limits) ([]domain.Route, error) {
 	var ems []emit
 	byBase := map[string][]int{}
 	var order []string
+	total := 0
 	for i := range servers {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		s := &servers[i]
-		locs := kept(s.locs)
+		locs, err := kept(ctx, s.locs)
+		if err != nil {
+			return nil, err
+		}
 		seen := map[string]bool{}
 		for _, n := range s.names {
 			dom, ok := display(n, base)
@@ -525,6 +603,11 @@ func routes(servers []server, base string) []domain.Route {
 			for _, l := range locs {
 				if seen[dom+"\x00"+l.label] {
 					continue
+				}
+				// Checked while emitting, so names x locations cannot build a
+				// huge result before failing.
+				if total += len(l.target.members); total > lim.routes {
+					return nil, fmt.Errorf("nginx: %s:%d: more than %d routes", l.file, l.line, lim.routes)
 				}
 				seen[dom+"\x00"+l.label] = true
 				key := "nginx:" + n + ":" + l.label
@@ -561,17 +644,26 @@ func routes(servers []server, base string) []domain.Route {
 			ems[e].key = k
 		}
 	}
-	var out []domain.Route
+	out := make([]keyed, 0, total)
 	for _, e := range ems {
 		ms := e.l.target.members
 		for i, m := range ms {
 			key := e.key
 			if len(ms) > 1 {
-				key += ":" + strconv.Itoa(i)
+				key += "#" + strconv.Itoa(i)
 			}
-			out = append(out, domain.Route{Key: key, Domain: e.domain, PathPrefix: e.l.label, UpstreamHost: m.host, UpstreamPort: m.port, TLS: e.s.tls, Status: "unknown"})
+			out = append(out, keyed{domain.Route{Key: key, Domain: e.domain, PathPrefix: e.l.label, UpstreamHost: m.host, UpstreamPort: m.port, TLS: e.s.tls, Status: "unknown"}, e.l})
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Key < out[j].Key })
-	return slices.CompactFunc(out, func(a, b domain.Route) bool { return a.Key == b.Key })
+	sort.SliceStable(out, func(i, j int) bool { return out[i].r.Key < out[j].r.Key })
+	rs := make([]domain.Route, len(out))
+	for i, k := range out {
+		// A location label can still spell another route's suffix
+		// ("location /:80"); dropping either route would hide it.
+		if i > 0 && k.r.Key == out[i-1].r.Key {
+			return nil, fmt.Errorf("nginx: %s:%d: route key collides with the route from %s:%d", k.l.file, k.l.line, out[i-1].l.file, out[i-1].l.line)
+		}
+		rs[i] = k.r
+	}
+	return rs, nil
 }

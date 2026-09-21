@@ -204,12 +204,12 @@ func TestDebianLayout(t *testing.T) {
 	kv := map[string]any{"path": root, "path_map": []string{"/etc/nginx=" + root}}
 	routes := scan(t, New(), kv)
 	want := []domain.Route{
-		{Key: "nginx:docs.example.com:/:0", Domain: "docs.example.com", PathPrefix: "/", UpstreamHost: "10.0.0.21", UpstreamPort: 8080, Status: "unknown"},
-		{Key: "nginx:docs.example.com:/:1", Domain: "docs.example.com", PathPrefix: "/", UpstreamHost: "10.0.0.22", UpstreamPort: 80, Status: "unknown"},
+		{Key: "nginx:docs.example.com:/#0", Domain: "docs.example.com", PathPrefix: "/", UpstreamHost: "10.0.0.21", UpstreamPort: 8080, Status: "unknown"},
+		{Key: "nginx:docs.example.com:/#1", Domain: "docs.example.com", PathPrefix: "/", UpstreamHost: "10.0.0.22", UpstreamPort: 80, Status: "unknown"},
 		{Key: "nginx:photos.example.com:/", Domain: "photos.example.com", PathPrefix: "/", UpstreamHost: "127.0.0.1", UpstreamPort: 2283, TLS: true, Status: "unknown"},
 		{Key: "nginx:photos.example.com:/api/", Domain: "photos.example.com", PathPrefix: "/api/", UpstreamHost: "immich", UpstreamPort: 3001, TLS: true, Status: "unknown"},
-		{Key: "nginx:www.docs.example.com:/:0", Domain: "www.docs.example.com", PathPrefix: "/", UpstreamHost: "10.0.0.21", UpstreamPort: 8080, Status: "unknown"},
-		{Key: "nginx:www.docs.example.com:/:1", Domain: "www.docs.example.com", PathPrefix: "/", UpstreamHost: "10.0.0.22", UpstreamPort: 80, Status: "unknown"},
+		{Key: "nginx:www.docs.example.com:/#0", Domain: "www.docs.example.com", PathPrefix: "/", UpstreamHost: "10.0.0.21", UpstreamPort: 8080, Status: "unknown"},
+		{Key: "nginx:www.docs.example.com:/#1", Domain: "www.docs.example.com", PathPrefix: "/", UpstreamHost: "10.0.0.22", UpstreamPort: 80, Status: "unknown"},
 	}
 	if !reflect.DeepEqual(routes, want) {
 		t.Fatalf("got %#v", routes)

@@ -126,8 +126,18 @@ func load(ctx context.Context, s settings, lim limits) (*loader, []*directive, e
 // entries picks the files a directory mount starts from: nginx.conf, else its
 // *.conf fragments, else every plain file (a mounted sites-enabled).
 func (l *loader) entries(dir string) ([]string, error) {
-	if r, err := l.candidate(filepath.Join(dir, "nginx.conf")); err == nil {
-		return []string{r}, nil
+	// An nginx.conf that exists but cannot be used is an error: falling back
+	// to sibling *.conf files would report a config nginx never loads.
+	main := filepath.Join(dir, "nginx.conf")
+	if _, err := os.Lstat(main); !errors.Is(err, fs.ErrNotExist) {
+		r, err := l.candidate(main)
+		switch {
+		case err == nil:
+			return []string{r}, nil
+		case skippable(err):
+			return nil, fmt.Errorf("nginx: nginx.conf: %v", err)
+		}
+		return nil, fmt.Errorf("nginx: cannot read nginx.conf: %v", cause(err))
 	}
 	des, err := os.ReadDir(dir)
 	if err != nil {
@@ -299,7 +309,15 @@ func (l *loader) read(real string, site *directive) ([]*directive, error) {
 		fail = func(msg string) error { return dirErr(site, msg) }
 	}
 	tooBig := fmt.Sprintf("%s is larger than %d bytes", subject, l.lim.fileBytes)
-	fi, err := os.Stat(real)
+	// The path was resolved symlink-free, but it may have changed since: the
+	// open refuses a symlink and cannot block on a FIFO, and the descriptor
+	// itself must turn out to be a regular file.
+	f, err := openConfig(real)
+	if err != nil {
+		return nil, fail(fmt.Sprintf("cannot read %s: %v", subject, cause(err)))
+	}
+	defer f.Close()
+	fi, err := f.Stat()
 	if err != nil {
 		return nil, fail(fmt.Sprintf("cannot read %s: %v", subject, cause(err)))
 	}
@@ -309,11 +327,6 @@ func (l *loader) read(real string, site *directive) ([]*directive, error) {
 	if fi.Size() > l.lim.fileBytes {
 		return nil, fail(tooBig)
 	}
-	f, err := os.Open(real)
-	if err != nil {
-		return nil, fail(fmt.Sprintf("cannot read %s: %v", subject, cause(err)))
-	}
-	defer f.Close()
 	b, err := io.ReadAll(io.LimitReader(f, l.lim.fileBytes+1))
 	if err != nil {
 		return nil, fail(fmt.Sprintf("cannot read %s: %v", subject, cause(err)))
