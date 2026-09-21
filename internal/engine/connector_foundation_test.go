@@ -179,7 +179,9 @@ type endpointConnector struct {
 	err      error
 }
 
-func (c *endpointConnector) ProxyEndpoint(connectors.Config) (string, error) { return c.endpoint, c.err }
+func (c *endpointConnector) ProxyEndpoint(connectors.Config) (string, error) {
+	return c.endpoint, c.err
+}
 
 func newTestRunner(t *testing.T, st *store.Store, cs ...connectors.Connector) (*Runner, *store.ConnectorConfigs) {
 	t.Helper()

@@ -149,6 +149,7 @@ func (r *Runner) addRouteTargets(ctx context.Context, kind string, cfg connector
 		cfg[key] = b
 	}
 }
+
 // proxyKinds are the connectors whose routes belong to a proxies row.
 var proxyKinds = map[string]bool{"traefik": true, "caddy": true, "npm": true, "nginx": true}
 

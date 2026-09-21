@@ -404,6 +404,7 @@ func matchingNetworks(host string, s Service) []string {
 	}
 	return networks
 }
+
 // listens reports whether the service can serve the requested port (serves) and
 // whether that was verified against a known port row (verified). A service with
 // no known ports at all is treated as possibly serving (serves=true) but
