@@ -221,6 +221,7 @@ What it extracts, per `server` block and `location`:
 - `server_name` values, wildcards kept; `_`, empty and regex names are skipped.
 - TLS from `listen ... ssl` / `quic` or legacy `ssl on`.
 - `proxy_pass` upstreams, with `set $var ...` variables substituted (server scope, then location scope), as SWAG proxy-confs use them. `upstream {}` groups produce one route per member. `unix:` sockets are skipped. An upstream that still contains an unresolved variable is shown verbatim and marked broken rather than hidden.
+- A location that reaches the same upstream as a shorter prefix in the same server block is folded into it (SWAG's `/radarr/api` under `/radarr`), so the register lists each domain-to-container path once. Regex, named and internal locations appear only when they reach an upstream no plain location does.
 
 A parse error fails the scan and keeps the previous inventory. Reads are bounded (file size, file count, total bytes, include depth), include cycles are detected, and anything resolving outside the mounted paths is skipped.
 
