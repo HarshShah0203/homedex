@@ -98,7 +98,7 @@ Reads your tailnet's device list from the Tailscale API. Each device becomes a h
 
 Only the default device fields are requested. Node keys, machine keys, owners' email addresses and connectivity endpoints are never read.
 
-**Routes over the tailnet.** A proxy upstream written as a tailnet IP, MagicDNS name or short name resolves, at medium confidence, to the service publishing that port on the same machine as seen by the Docker or SSH connector. The link needs exactly one Docker, SSH or manual host with the same short hostname, claimed by exactly one tailnet device. If two hosts or two devices share the name, Homedex does not guess: give the machines distinct names, or remove stale devices from the tailnet. A proxy whose URL is a tailnet name is linked to that machine on its next scan.
+**Routes over the tailnet.** A proxy upstream written as a tailnet IP, MagicDNS name or short name resolves, at medium confidence, to the service publishing that port on the same machine as seen by the Docker or SSH connector. A device is linked to a Docker, SSH or manual host whose address is one of the device's tailnet addresses or names; failing that, to the one such host with the same short hostname. Each machine can be claimed by only one device. If two hosts or two devices match, Homedex does not guess: give the machines distinct names, set the host's address to its tailnet IP, or remove stale devices from the tailnet. A proxy whose URL is a tailnet name is linked to that machine on its next scan.
 
 Recommended config, an OAuth client:
 
@@ -120,7 +120,7 @@ The simple alternative is an API access token:
 
 An access token acts with every permission of the user who created it and expires within 90 days, so prefer the OAuth client.
 
-`tailnet` `"-"` means the credential's own tailnet. Secrets are sealed with the instance key like every connector secret, never returned by the API, and never included in exports or error messages. Redirects are not followed. The only egress needed is HTTPS to `api.tailscale.com`.
+`tailnet` `"-"` means the credential's own tailnet. Secrets are sealed with the instance key like every connector secret, never returned by the API, and never included in exports or error messages. Redirects are not followed, and `base_url` (for tests only) must be HTTPS unless it points at a loopback address. The only egress needed is HTTPS to `api.tailscale.com`.
 
 Troubleshooting:
 
