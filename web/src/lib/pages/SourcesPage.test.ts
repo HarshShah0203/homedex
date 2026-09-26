@@ -129,6 +129,19 @@ describe('SourcesPage add source', () => {
     expect(body.config).toEqual({ tailnet: '-', api_key: 'api-token' });
   });
 
+  it('posts image update checks with skipped prefixes on a daily schedule', async () => {
+    const body = await createBody('registry', async () => {
+      expect(screen.getByLabelText('Skip images, one per line').tagName).toBe('TEXTAREA');
+      expect(screen.getByText(/anonymous, read-only manifest requests/)).toBeInTheDocument();
+      await fireEvent.input(screen.getByLabelText('Skip images, one per line'), { target: { value: ' registry.lab.example/ \n\n ghcr.io/my-org/ \n' } });
+      await fireEvent.input(screen.getByLabelText('Timeout, seconds'), { target: { value: '15' } });
+    });
+    expect(body.kind).toBe('registry');
+    expect(body.name).toBe('Image updates');
+    expect(body.schedule_minutes).toBe(1440);
+    expect(body.config).toEqual({ exclude: ['registry.lab.example/', 'ghcr.io/my-org/'], timeout_seconds: 15 });
+  });
+
   it('enables save only after the current settings pass a test', async () => {
     const inventory = createDemoInventory();
     inventory.source = 'api';

@@ -24,7 +24,8 @@
     { kind: 'ssh', label: 'SSH host', name: 'SSH host', schedule: 15 },
     { kind: 'tailscale', label: 'Tailscale', name: 'Tailscale', schedule: 15 },
     { kind: 'tlsprobe', label: 'TLS probe', name: 'TLS probe', schedule: 1440 },
-    { kind: 'rdap', label: 'RDAP domains', name: 'RDAP domains', schedule: 1440 }
+    { kind: 'rdap', label: 'RDAP domains', name: 'RDAP domains', schedule: 1440 },
+    { kind: 'registry', label: 'Image updates (registries)', name: 'Image updates', schedule: 1440 }
   ];
 
   let adding = $state(false);
@@ -48,6 +49,7 @@
   let fTargets = $state('');
   let fTimeout = $state<number | null>(null);
   let fDomains = $state('');
+  let fSkipImages = $state('');
   let fSshHost = $state('');
   let fSshKey = $state('');
   let fSshPassphrase = $state('');
@@ -77,6 +79,8 @@
         return { targets: splitLines(fTargets), ...(fTimeout && fTimeout > 0 ? { timeout_seconds: fTimeout } : {}) };
       case 'rdap':
         return { domains: splitLines(fDomains) };
+      case 'registry':
+        return { exclude: splitLines(fSkipImages), ...(fTimeout && fTimeout > 0 ? { timeout_seconds: fTimeout } : {}) };
       case 'ssh':
         return {
           host: fSshHost.trim(),
@@ -187,6 +191,7 @@
     fTargets = '';
     fTimeout = null;
     fDomains = '';
+    fSkipImages = '';
     fEndpoint = 'tcp://docker-socket-proxy:2375';
     fHostName = '';
     fHostAddress = '';
@@ -337,6 +342,10 @@
             <label class="field-label">Timeout, seconds <input type="number" min="1" bind:value={fTimeout} placeholder="Optional" /></label>
           {:else if addKind === 'rdap'}
             <label class="field-label">Domains, one per line <textarea bind:value={fDomains} rows="3" placeholder="example.com"></textarea></label>
+          {:else if addKind === 'registry'}
+            <label class="field-label">Skip images, one per line <textarea bind:value={fSkipImages} rows="3" placeholder="registry.lab.example/"></textarea></label>
+            <label class="field-label">Timeout, seconds <input type="number" min="1" max="60" bind:value={fTimeout} placeholder="Optional, 10" /></label>
+            <small class="field-help">Asks each image's registry whether the tag a container runs now points at a newer build, with anonymous, read-only manifest requests. No layers are downloaded and no credentials are stored, so images from private registries show as unknown. Images whose reference starts with a skipped prefix are not checked.</small>
           {:else if addKind === 'ssh'}
             <label class="field-label">SSH host <input bind:value={fSshHost} placeholder="nas.lab.internal:22" /></label>
             <label class="field-label">User <input bind:value={fUsername} placeholder="inventory" /></label>
