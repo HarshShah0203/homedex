@@ -27,12 +27,16 @@ New connectors ship in tagged releases. To hear about them, choose **Watch > Cus
 
 ## Quickstart
 
-All you need is Docker with Compose v2. Download one file and start it; there is nothing to clone or build:
+All you need is Docker with Compose v2. Download one file into a new directory and start it; there is nothing to clone or build:
 
 ```sh
+mkdir homedex
+cd homedex
 curl -fsSLO https://raw.githubusercontent.com/HarshShah0203/homedex/main/docker-compose.yml
 docker compose up -d
 ```
+
+Use a new, empty directory. The download replaces any `docker-compose.yml` already there, and Compose also reads a `.env` or `docker-compose.override.yml` that sits next to it, which would change or take over the Homedex stack. Run later `docker compose` commands for Homedex from this directory too.
 
 The stack pulls the published multi-arch image (`linux/amd64`, `linux/arm64`, `linux/arm/v7`), binds the UI to loopback, gives Homedex a persistent data volume, and puts a filtering proxy between Homedex and the Docker socket.
 

@@ -1,8 +1,13 @@
 # Homedex needs only this file. It pulls the published multi-arch image, so no
 # checkout or Go/Node toolchain is required:
 #
+#   mkdir homedex
+#   cd homedex
 #   curl -fsSLO https://raw.githubusercontent.com/HarshShah0203/homedex/main/docker-compose.yml
 #   docker compose up -d
+#
+# Use a new, empty directory: the download replaces any docker-compose.yml
+# there, and Compose also reads a .env or docker-compose.override.yml beside it.
 #
 # HOMEDEX_VERSION pins a release (default: the newest 0.1.x). To build from a
 # checkout instead, add docker-compose.build.yml:

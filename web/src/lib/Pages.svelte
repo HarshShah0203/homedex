@@ -44,7 +44,7 @@
 {:else if DEMO_MODE && pathname === '/setup'}
   <main class="page">
     <PageHead kicker="Setup · Live demo" title="Setup runs on your own install" copy="The setup wizard creates your admin password, connects a first read-only source, and runs the first scan live. This demo has no server behind it, so it starts from fabricated records instead." />
-    <section class="empty-register"><strong>NOTHING TO CONNECT HERE</strong><span>Two commands start Homedex on your own Docker host.</span><a class="primary-button" href={INSTALL_URL}>Install Homedex</a><button class="quiet-button" onclick={() => navigate('/')}>Back to the index</button></section>
+    <section class="empty-register"><strong>NOTHING TO CONNECT HERE</strong><span>One downloaded Compose file starts Homedex on your own Docker host.</span><a class="primary-button" href={INSTALL_URL}>Install Homedex</a><button class="quiet-button" onclick={() => navigate('/')}>Back to the index</button></section>
   </main>
 {:else}
   <main class="page">
