@@ -93,4 +93,7 @@ ENV HOMEDEX_DATA_DIR=/data \
     HOME=/home/nonroot
 EXPOSE 7377
 VOLUME ["/data"]
+# The image has no shell or curl, so the binary probes its own /api/health on
+# the port HOMEDEX_LISTEN names.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/homedex", "healthcheck"]
 ENTRYPOINT ["/homedex"]

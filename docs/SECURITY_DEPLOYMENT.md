@@ -33,6 +33,36 @@ Do not publish `7377` on all interfaces unless a host firewall enforces the inte
 
 Homedex does not currently enforce an external base URL or proxy identity. Configure host allowlists, request-size limits, TLS policy, and authentication at the proxy as appropriate.
 
+## Setting the admin password at startup
+
+Until an admin password exists, `POST /api/setup` accepts the first password anyone sends, so whoever reaches a fresh instance first owns it. On loopback that is only you. Once the UI is published on a LAN, and every homelab app store (Portainer templates, TrueNAS, CasaOS, Cosmos, Unraid) publishes it, set the password before the first start instead:
+
+| Variable | Meaning |
+|---|---|
+| `HOMEDEX_ADMIN_PASSWORD` | The admin password itself. |
+| `HOMEDEX_ADMIN_PASSWORD_FILE` | Path to a file holding it, such as a mounted Docker or Compose secret. Exactly one trailing newline (LF or CRLF) is removed; any other whitespace is part of the password. The file may hold at most 4096 bytes. |
+
+Setting both refuses to start. At startup, when no admin exists yet, Homedex validates the password exactly as the setup wizard does (12 or more characters) and stores only its Argon2id hash. A shorter password stops startup with an error that names the variable, never the value. The log records only that the admin password was set from the environment and which variable supplied it. The setup wizard then treats the instance as configured: it asks you to sign in and continues with your first source.
+
+When an admin already exists, the variable is ignored, one log line says so, and the stored password is never replaced; remove the variable after the first start if you like. Homedex also removes both variables from its own process environment once it has read them, so child processes such as the ssh client for `ssh://` Docker sources never inherit them.
+
+A plain environment variable is visible to anyone who can run `docker inspect` on the container. To keep it out of the container config, use a secret file. With Compose, add an override beside `docker-compose.yml`:
+
+```yaml
+# docker-compose.override.yml
+services:
+  homedex:
+    environment:
+      HOMEDEX_ADMIN_PASSWORD_FILE: /run/secrets/homedex_admin_password
+    secrets:
+      - homedex_admin_password
+secrets:
+  homedex_admin_password:
+    file: ./admin_password.txt
+```
+
+Outside Swarm, Compose bind-mounts the file with its host ownership, and Homedex runs as UID `65532`, so make it readable by that user only: `sudo chown 65532:65532 admin_password.txt` and `chmod 0400 admin_password.txt`.
+
 ## Authentication modes
 
 Normal mode uses the local admin password, session cookie, CSRF token, and login throttle.
