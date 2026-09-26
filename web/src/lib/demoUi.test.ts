@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import DemoBanner from './DemoBanner.svelte';
 import Pages from './Pages.svelte';
 import SharesPanel from './SharesPanel.svelte';
+import HostsPage from './pages/HostsPage.svelte';
 import SourcesPage from './pages/SourcesPage.svelte';
 import { createDemoInventory } from './demo';
 import { DEMO_MODE, DEMO_REFUSED_EVENT } from './demoMode';
@@ -59,6 +60,26 @@ describe('live demo screens', () => {
     expect(notice.closest('.register-row')).toHaveTextContent('Family wiki');
     expect(screen.queryByText('SHARES UNAVAILABLE')).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('counts host and source totals from the records the registers list', () => {
+    const inventory = createDemoInventory();
+    const { unmount } = render(HostsPage, { props: { path: '/hosts', inventory } });
+
+    for (const host of inventory.hosts) {
+      const card = document.querySelector(`[data-component-id="host-record-${host.name}"]`);
+      const [services, ports] = [...(card?.querySelectorAll('dd') ?? [])].map((cell) => cell.textContent);
+      expect(services).toBe(String(inventory.services.filter((service) => service.host === host.name).length));
+      expect(ports).toBe(String(inventory.ports.filter((port) => port.host === host.name).length));
+    }
+    unmount();
+
+    render(SourcesPage, { props: { inventory } });
+    // nas-01 runs 5 services on 5 ports; Nginx Proxy Manager fronts 3 routes
+    // with 3 certificates; Caddy fronts 1 route.
+    expect(screen.getByText('5 services · 5 ports')).toBeInTheDocument();
+    expect(screen.getByText('3 routes · 3 certs')).toBeInTheDocument();
+    expect(screen.getByText('1 route')).toBeInTheDocument();
   });
 
   it('replaces the setup wizard with install directions', () => {

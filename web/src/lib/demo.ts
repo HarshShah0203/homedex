@@ -1,9 +1,10 @@
+import { plural } from './time';
 import type { Change, Connector, Expiry, Host, Inventory, NotificationRule, Port, Route, Service, Share } from './types';
 
 export const hosts: Host[] = [
-  { id: 1, name: 'gateway', kind: 'docker', address: '10.0.10.5', os: 'Debian 13', arch: 'amd64', state: 'active', services: 6, ports: 11, last_seen: '2m ago' },
-  { id: 2, name: 'nas-01', kind: 'docker', address: '10.0.20.10', os: 'Ubuntu 24.04', arch: 'amd64', state: 'active', services: 19, ports: 54, last_seen: '2m ago' },
-  { id: 3, name: 'core-01', kind: 'docker', address: '10.0.10.8', os: 'Alpine 3.22', arch: 'arm64', state: 'active', services: 14, ports: 34, last_seen: '2m ago' }
+  { id: 1, name: 'gateway', kind: 'docker', address: '10.0.10.5', os: 'Debian 13', arch: 'amd64', state: 'active', last_seen: '2m ago' },
+  { id: 2, name: 'nas-01', kind: 'docker', address: '10.0.20.10', os: 'Ubuntu 24.04', arch: 'amd64', state: 'active', last_seen: '2m ago' },
+  { id: 3, name: 'core-01', kind: 'docker', address: '10.0.10.8', os: 'Alpine 3.22', arch: 'arm64', state: 'active', last_seen: '2m ago' }
 ];
 
 export const services: Service[] = [
@@ -51,9 +52,9 @@ export const changes: Change[] = [
 ];
 
 export const connectors: Connector[] = [
-  { id:1,kind:'docker',name:'Docker · nas-01',enabled:true,schedule_minutes:15,last_status:'connected',last_error:'',created_at:'2026-07-16T10:40:00Z',updated_at:'2026-07-16T10:42:00Z',endpoint:'socket-proxy · tcp://10.0.20.10:2375',found:'19 services · 54 ports' },
-  { id:2,kind:'npm',name:'Nginx Proxy Manager',enabled:true,schedule_minutes:15,last_status:'connected',last_error:'',created_at:'2026-07-16T10:40:00Z',updated_at:'2026-07-16T10:42:00Z',endpoint:'https://proxy.lab.internal · dedicated read-only account',found:'16 routes · 8 certs' },
-  { id:3,kind:'caddy',name:'Caddy · core-01',enabled:true,schedule_minutes:15,last_status:'error',last_error:'Connection refused: dial tcp 10.0.10.8:2019',created_at:'2026-07-16T10:40:00Z',updated_at:'2026-07-16T10:42:00Z',endpoint:'http://10.0.10.8:2019',found:'4 routes' }
+  { id:1,kind:'docker',name:'Docker · nas-01',enabled:true,schedule_minutes:15,last_status:'connected',last_error:'',created_at:'2026-07-16T10:40:00Z',updated_at:'2026-07-16T10:42:00Z',endpoint:'socket-proxy · tcp://10.0.20.10:2375' },
+  { id:2,kind:'npm',name:'Nginx Proxy Manager',enabled:true,schedule_minutes:15,last_status:'connected',last_error:'',created_at:'2026-07-16T10:40:00Z',updated_at:'2026-07-16T10:42:00Z',endpoint:'https://proxy.lab.internal · dedicated read-only account' },
+  { id:3,kind:'caddy',name:'Caddy · core-01',enabled:true,schedule_minutes:15,last_status:'error',last_error:'Connection refused: dial tcp 10.0.10.8:2019',created_at:'2026-07-16T10:40:00Z',updated_at:'2026-07-16T10:42:00Z',endpoint:'http://10.0.10.8:2019' }
 ];
 
 const DAY_MS = 86_400_000;
@@ -62,20 +63,49 @@ function isoFrom(now: Date, offsetMs: number): string {
   return new Date(now.getTime() + offsetMs).toISOString();
 }
 
+// What each fabricated source read. Its "Indexed" summary is counted from the
+// same records the registers list, and hosts carry no fixed totals, so the
+// Hosts cards, the host inspector and the Sources page agree with each other.
+const connectorScope: Record<number, { host?: string; proxy?: string }> = {
+  1: { host: 'nas-01' },
+  2: { proxy: 'Nginx Proxy Manager' },
+  3: { proxy: 'Caddy' }
+};
+
+type IndexedRecords = Pick<Inventory, 'services' | 'ports' | 'routes' | 'expiries'>;
+
+function indexedSummary(connector: Connector, records: IndexedRecords): string | undefined {
+  const scope = connectorScope[connector.id];
+  if (scope?.host) {
+    const serviceCount = records.services.filter((service) => service.host === scope.host).length;
+    const portCount = records.ports.filter((port) => port.host === scope.host).length;
+    return `${plural(serviceCount, 'service')} · ${plural(portCount, 'port')}`;
+  }
+  if (scope?.proxy) {
+    const domains = records.routes.filter((route) => route.proxy === scope.proxy).map((route) => route.domain);
+    const certCount = records.expiries.filter((record) => record.entity_type === 'cert' && domains.includes(record.name)).length;
+    return certCount ? `${plural(domains.length, 'route')} · ${plural(certCount, 'cert')}` : plural(domains.length, 'route');
+  }
+  return undefined;
+}
+
 // Dates are anchored to `now` so the hosted live demo never shows a
 // certificate "14 days out" that lapsed months ago, or a scan from last season.
 export function createDemoInventory(error?: string, now: Date = new Date()): Inventory {
-  return {
+  const records: IndexedRecords = {
     services: services.map((item) => ({ ...item })),
-    hosts: hosts.map((item) => ({ ...item })),
     ports: ports.map((item) => ({ ...item })),
     routes: routes.map((item) => ({ ...item })),
-    changes: changes.map((item) => ({ ...item })),
     expiries: expiries.map((item) => {
       const at = item.days_remaining === null ? item.expires_at : isoFrom(now, item.days_remaining * DAY_MS);
       return { ...item, expires_at: at, expires: at };
-    }),
-    connectors: connectors.map((item) => ({ ...item, created_at: isoFrom(now, -30 * DAY_MS), updated_at: isoFrom(now, -2 * 60_000) })),
+    })
+  };
+  return {
+    ...records,
+    hosts: hosts.map((item) => ({ ...item })),
+    changes: changes.map((item) => ({ ...item })),
+    connectors: connectors.map((item) => ({ ...item, found: indexedSummary(item, records), created_at: isoFrom(now, -30 * DAY_MS), updated_at: isoFrom(now, -2 * 60_000) })),
     source: 'demo',
     readOnly: false,
     issues: [],
