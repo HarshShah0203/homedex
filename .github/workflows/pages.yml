@@ -1,0 +1,56 @@
+name: Pages
+
+# Publishes the static live demo (fabricated data, no backend) to
+# https://harshshah0203.github.io/homedex/. The repository's Pages source must
+# be set to "GitHub Actions" for the deploy job to succeed.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build live demo
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Build the demo under /homedex/
+        run: npm run build:demo
+      - name: Demo build left the embedded assets alone
+        working-directory: .
+        run: git diff --exit-code -- internal/server/static
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist-demo
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
