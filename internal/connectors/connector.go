@@ -1,11 +1,13 @@
 package connectors
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -18,7 +20,8 @@ import (
 // hang a scan indefinitely.
 const DefaultTimeout = 30 * time.Second
 
-// MaxResponseBytes caps how much of an HTTP JSON response GetJSON will read.
+// MaxResponseBytes caps how much of an HTTP JSON response GetJSON, PostJSON and
+// PostForm will read.
 // Connector upstreams are not always administrator-chosen (the RDAP servers in
 // particular are discovered from IANA bootstrap data), so a hostile or
 // compromised upstream must not be able to stream unbounded JSON and exhaust
@@ -35,10 +38,10 @@ func Client(timeout time.Duration) *http.Client {
 	return &http.Client{Timeout: timeout}
 }
 
-// StatusError is returned by GetJSON when an upstream responds with a non-2xx
-// status. It preserves the raw code so callers can react to specific statuses
-// (npm refreshes its token on 401) while its message keeps each connector's
-// existing "<Label> API returned <status>" phrasing.
+// StatusError is returned by GetJSON, PostJSON and PostForm when an upstream
+// responds with a non-2xx status. It preserves the raw code so callers can
+// react to specific statuses (npm refreshes its token on 401) while its message
+// keeps each connector's existing "<Label> API returned <status>" phrasing.
 type StatusError struct {
 	Label      string
 	StatusCode int
@@ -52,30 +55,31 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("API returned %s", e.Status)
 }
 
-type getOptions struct {
+type requestOptions struct {
 	label      string
 	requestFns []func(*http.Request)
 }
 
-// Option customizes a GetJSON request.
-type Option func(*getOptions)
+// Option customizes a GetJSON, PostJSON or PostForm request.
+type Option func(*requestOptions)
 
 // WithLabel sets the connector name used in StatusError messages so a non-2xx
 // response reads e.g. "Traefik API returned 401 Unauthorized".
 func WithLabel(label string) Option {
-	return func(o *getOptions) { o.label = label }
+	return func(o *requestOptions) { o.label = label }
 }
 
 // WithBasicAuth adds HTTP basic authentication to the request.
 func WithBasicAuth(username, password string) Option {
-	return func(o *getOptions) {
+	return func(o *requestOptions) {
 		o.requestFns = append(o.requestFns, func(r *http.Request) { r.SetBasicAuth(username, password) })
 	}
 }
 
-// WithHeader sets a single request header.
+// WithHeader sets a single request header. It is applied after the request's
+// own headers, so it can also replace the Content-Type PostJSON sets.
 func WithHeader(key, value string) Option {
-	return func(o *getOptions) {
+	return func(o *requestOptions) {
 		o.requestFns = append(o.requestFns, func(r *http.Request) { r.Header.Set(key, value) })
 	}
 }
@@ -91,14 +95,59 @@ func WithBearerToken(token string) Option {
 // through an io.LimitReader(MaxResponseBytes) size cap, and callers are expected
 // to use a client with an explicit timeout (see Client). A non-2xx response
 // yields a *StatusError carrying the status code and the caller's label.
-func GetJSON(ctx context.Context, client *http.Client, url string, out any, opts ...Option) error {
-	var o getOptions
+func GetJSON(ctx context.Context, client *http.Client, rawURL string, out any, opts ...Option) error {
+	return doJSON(ctx, client, http.MethodGet, rawURL, "", nil, out, opts)
+}
+
+// PostJSON issues a POST with the given context, sending body encoded as JSON
+// (Content-Type: application/json), and decodes a 2xx JSON response into out
+// exactly as GetJSON does: bounded by MaxResponseBytes, with a *StatusError
+// for any other status. It is for the retrieval a read-only connector needs to
+// POST (a login, a GraphQL query), never for a request that changes the
+// connected system.
+//
+// PostJSON never follows a redirect, whatever the client's own policy: a 307
+// or 308 would resend the body, which often carries a credential, to whatever
+// host the redirect names. The redirect comes back as a *StatusError instead.
+func PostJSON(ctx context.Context, client *http.Client, rawURL string, body, out any, opts ...Option) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("encode request body: %w", err)
+	}
+	return doJSON(ctx, withoutRedirects(client), http.MethodPost, rawURL, "application/json", payload, out, opts)
+}
+
+// PostForm is PostJSON for an application/x-www-form-urlencoded body, such as
+// an OAuth client-credentials token request. It never follows a redirect
+// either.
+func PostForm(ctx context.Context, client *http.Client, rawURL string, form url.Values, out any, opts ...Option) error {
+	return doJSON(ctx, withoutRedirects(client), http.MethodPost, rawURL, "application/x-www-form-urlencoded", []byte(form.Encode()), out, opts)
+}
+
+// withoutRedirects returns a copy of client that hands a redirect back to the
+// caller instead of following it. The copy shares the transport, so it keeps
+// the client's timeout, TLS settings and connection pool.
+func withoutRedirects(client *http.Client) *http.Client {
+	c := *client
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &c
+}
+
+func doJSON(ctx context.Context, client *http.Client, method, rawURL, contentType string, body []byte, out any, opts []Option) error {
+	var o requestOptions
 	for _, fn := range opts {
 		fn(&o)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
 		return err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	for _, fn := range o.requestFns {
 		fn(req)

@@ -73,6 +73,10 @@ When adding a connector:
 6. Document the least-privilege account/network setup in `docs/CONNECTORS.md`.
 7. Verify that no mutation method or secret-bearing field is read.
 
+For HTTP APIs, use `connectors.GetJSON`, `connectors.PostJSON` (a JSON body) or `connectors.PostForm` (a form body) with a client that has an explicit timeout, such as `connectors.Client`. Each takes the scan's context, reads at most `connectors.MaxResponseBytes`, turns a non-2xx answer into a `*connectors.StatusError` named by `WithLabel`, and accepts `WithBasicAuth`, `WithBearerToken` and `WithHeader`. POST is only for retrieval that needs it, such as a login or a GraphQL query, never for a request that changes the connected system. The POST helpers never follow a redirect, so a body carrying a credential is not resent to another host.
+
+A connector writes only its own rows, so a source that describes a machine another connector already reports emits a view host rather than a second machine. Kind `tailscale` is a tailnet device; kind `dns` is the set of names a local resolver answers for one IP, with that IP as `Address` and the names as `Aliases`. Route resolution links a view to the one machine reported at the same address and follows it to that machine's ports. A DNS view links by its IP only, never by a name, and a loopback or unspecified record links to nothing. Kinds `unraid`, `truenas` and `k8s-node` are machines, like `docker` and `ssh`. Any other new host kind needs a migration that widens the hosts table's kind check.
+
 The existing Docker, Traefik, Caddy, and NPM connectors demonstrate different patterns. Their exact line counts are not an API or complexity promise.
 
 ## Pull requests
