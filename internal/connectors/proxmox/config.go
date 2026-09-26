@@ -41,8 +41,11 @@ type settings struct {
 	roots *x509.CertPool // the configured CA, or nil for the system roots
 }
 
-// PVE's own patterns: user@realm!tokenname.
-var tokenIDRE = regexp.MustCompile(`^[^\s:/@!]+@[A-Za-z][A-Za-z0-9._-]*![A-Za-z][A-Za-z0-9._-]*$`)
+// PVE's own patterns: user@realm!tokenname. A user name may itself contain
+// '@' (an email address in an LDAP, AD or OpenID realm); the realm starts
+// after the last one, since a realm cannot contain '@'. A '!' in the user
+// name is refused, as it would make the token name ambiguous.
+var tokenIDRE = regexp.MustCompile(`^[^\s:/!]+@[A-Za-z][A-Za-z0-9._-]*![A-Za-z][A-Za-z0-9._-]*$`)
 
 // decode validates without ever quoting a credential back: the error text
 // reaches the UI and the scan log.
@@ -117,6 +120,11 @@ func normalizeURL(raw string) (base, host string, https bool, err error) {
 	// the token on the wire in cleartext.
 	if u.Scheme == "http" && !loopbackHost(host) {
 		return "", "", false, errors.New("the Proxmox URL must use https unless its host is loopback (127.0.0.1, ::1 or localhost): http would send the token in cleartext")
+	}
+	// "LOCALHOST" and "localhost." are the same name; spelled any other way
+	// than "localhost" it would miss the proxy bypass and the hosts file.
+	if _, ipErr := netip.ParseAddr(host); ipErr != nil && loopbackHost(host) {
+		host = "localhost"
 	}
 	port := u.Port()
 	if port == "" {

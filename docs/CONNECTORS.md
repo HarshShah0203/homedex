@@ -137,7 +137,7 @@ Each node becomes a host of kind `proxmox-node`, each QEMU VM a host of kind `vm
 
 - Guests are keyed by VMID (`qemu:<vmid>`, `lxc:<vmid>`) and nodes by name (`node:<name>`), never by a guest name or IP, so renaming a guest or migrating it to another node is one "modified" change on the same host.
 - Each guest is shown on the node it runs on, and every host carries the power state Proxmox reports, verbatim: `running`, `stopped`, `paused` and so on for guests, `online`, `offline` or `unknown` for nodes. A stopped guest stays in the inventory; it goes gone only when it is deleted.
-- A running VM's addresses come from its QEMU guest agent and a running container's from Proxmox's container interface list. The first IPv4 address, by interface name, is the host's address and the others are aliases; IPv6 is used only when a guest has no IPv4, because temporary IPv6 addresses rotate daily. Loopback, link-local, Docker and bridge interfaces (`docker*`, `br-*`, `veth*`, CNI, Kubernetes) and overlays that other sources own (`tailscale*`, `wg*`, `zt*`) are ignored. A stopped guest has no addresses.
+- A running VM's addresses come from its QEMU guest agent and a running container's from Proxmox's container interface list. The first IPv4 address, by interface name, is the host's address and the others are aliases; IPv6 is used only when a guest has no IPv4, because temporary IPv6 addresses rotate daily. Loopback, link-local, Docker and bridge interfaces (`docker*`, `br-*`, `veth*`, CNI, Kubernetes) and overlays that other sources own (`tailscale*`, `wg*`, `zt*`) are ignored. A guest reports its own addresses, so at most 16 are kept per guest, the first by interface name and then address. A stopped guest has no addresses.
 - A node's address comes from the cluster status.
 - Templates are skipped.
 
@@ -146,7 +146,7 @@ Each node becomes a host of kind `proxmox-node`, each QEMU VM a host of kind `vm
 Config keys:
 
 - `url`: the address of any node, such as `https://pve.lab.example:8006` (port 8006 is the default). The node you name relays requests about guests on other nodes, so one URL covers the cluster; if that node is down, the scan fails until it is back.
-- `token_id`: the token ID, `user@realm!tokenname`.
+- `token_id`: the token ID, `user@realm!tokenname`. A user named by an email address, as in an LDAP, AD or OpenID realm, works too: `svc@example.com@authentik!inventory`.
 - `token_secret`: the token secret, shown once when the token is created.
 - `fingerprint`: the node certificate's SHA-256 fingerprint, to pin it. Optional; see below.
 - `ca_pem`: a CA certificate in PEM form, such as the cluster CA. Optional; set this or `fingerprint`, not both.
@@ -193,7 +193,7 @@ Proxmox serves a self-signed certificate by default. Leave the fingerprint empty
 
 A node certificate is renewed at least every two years, and a renewed certificate has a new fingerprint. To survive renewals, paste the cluster CA from `/etc/pve/pve-root-ca.pem` (valid for ten years) instead; the URL's host name must then be one the node certificate names, such as the node's name, its FQDN or its IP. A node with a certificate from a public CA, such as one issued through ACME, needs neither.
 
-There is no option to skip certificate verification. Plain `http` is accepted only for a loopback address, such as an SSH tunnel, because it would send the token in cleartext.
+There is no option to skip certificate verification. Plain `http` is accepted only for a loopback address, such as an SSH tunnel, because it would send the token in cleartext. It never goes through a proxy set in `HTTP_PROXY`, and Homedex refuses the connection if the name resolves to anything but loopback.
 
 ### What is read
 

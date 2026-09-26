@@ -469,7 +469,8 @@ func TestCancellationFailsTheScanPromptly(t *testing.T) {
 
 // Guests the budget does not reach keep their stored addresses, the scan
 // still succeeds, and no more than the configured number of guest calls run
-// at once.
+// at once. A stopped guest listed after them still reads as having no
+// addresses, rather than keeping the ones it had while it ran.
 func TestGuestFanOutIsBoundedInTimeAndConcurrency(t *testing.T) {
 	var inFlight, peak atomic.Int32
 	slow := func(w http.ResponseWriter, r *http.Request) {
@@ -491,10 +492,12 @@ func TestGuestFanOutIsBoundedInTimeAndConcurrency(t *testing.T) {
 		pathNodes:  body(`{"data":[{"type":"node","node":"pve1","status":"online"}]}`),
 		pathStatus: body(`{"data":[]}`),
 	}
-	for vmid := 100; vmid < 112; vmid++ {
+	// Nine calls fit the budget; the rest are left over when it runs out.
+	for vmid := 100; vmid < 124; vmid++ {
 		guests = append(guests, fmt.Sprintf(`{"type":"qemu","vmid":%d,"node":"pve1","name":"vm%d","status":"running","template":0}`, vmid, vmid))
 		routes[agentPath("pve1", vmid)] = slow
 	}
+	guests = append(guests, `{"type":"qemu","vmid":200,"node":"pve1","name":"off","status":"stopped","template":0}`)
 	routes[pathGuests] = body(`{"data":[` + strings.Join(guests, ",") + `]}`)
 	c := &Connector{guestTimeout: 250 * time.Millisecond, guestWorkers: 3, guestBudget: 600 * time.Millisecond}
 	begin := time.Now()
@@ -508,10 +511,20 @@ func TestGuestFanOutIsBoundedInTimeAndConcurrency(t *testing.T) {
 	if p := peak.Load(); p > 3 || p == 0 {
 		t.Fatalf("peak concurrent guest calls = %d, want 1..3", p)
 	}
+	var stopped bool
 	for _, h := range snap.Hosts {
-		if h.Kind == domain.HostKindVM && !h.AddressesUnread {
+		switch {
+		case h.Key == "qemu:200":
+			stopped = true
+			if h.AddressesUnread || h.Address != "" || len(h.Aliases) != 0 {
+				t.Fatalf("stopped guest after the budget ran out: unread=%v address=%q aliases=%v, want no addresses", h.AddressesUnread, h.Address, h.Aliases)
+			}
+		case h.Kind == domain.HostKindVM && !h.AddressesUnread:
 			t.Fatalf("guest %s read although every agent call timed out", h.Key)
 		}
+	}
+	if !stopped {
+		t.Fatal("stopped guest qemu:200 missing from the scan")
 	}
 	// The engine's own deadline also bounds the budget.
 	ctx, cancel := context.WithTimeout(context.Background(), budgetMargin+700*time.Millisecond)
@@ -599,6 +612,30 @@ func TestDecodeConfig(t *testing.T) {
 	if s := ok("url", "pve.lab.example"); s.auth != wantAuth {
 		t.Errorf("auth header = %q", s.auth)
 	}
+	// A user named by email in an LDAP, AD or OpenID realm: the realm starts
+	// after the last '@'.
+	for _, id := range []string{"a@b.example@oidc!tok", "svc.homedex@example.com@authentik!inventory"} {
+		s, err := decode(cfg("url", "pve.lab.example", "token_id", id, "token_secret", testSecret))
+		if err != nil {
+			t.Errorf("token ID %q: %v", id, err)
+		} else if want := "PVEAPIToken=" + id + "=" + testSecret; s.auth != want {
+			t.Errorf("token ID %q: auth header = %q", id, s.auth)
+		}
+	}
+	// Loopback spelled another way is reduced to "localhost", the one name
+	// the proxy settings and the hosts file know.
+	for in, want := range map[string]string{
+		"http://LOCALHOST:8006":   "http://localhost:8006",
+		"http://localhost.:8006":  "http://localhost:8006",
+		"https://LocalHost.":      "https://localhost:8006",
+		"http://[::1]:8006":       "http://[::1]:8006",
+		"http://127.0.0.1:8006":   "http://127.0.0.1:8006",
+		"https://PVE.lab.example": "https://PVE.lab.example:8006",
+	} {
+		if got := ok("url", in).base; got != want {
+			t.Errorf("url %q -> %q, want %q", in, got, want)
+		}
+	}
 	for name, kv := range map[string][]string{
 		"no url":             {"token_id", testTokenID, "token_secret", testSecret},
 		"path":               {"url", "https://pve.lab.example:8006/pve2/", "token_id", testTokenID, "token_secret", testSecret},
@@ -609,6 +646,8 @@ func TestDecodeConfig(t *testing.T) {
 		"user not token":     {"url", "pve", "token_id", "homedex@pve", "token_secret", testSecret},
 		"whole header":       {"url", "pve", "token_id", wantAuth, "token_secret", testSecret},
 		"bad token id":       {"url", "pve", "token_id", "homedex!inventory", "token_secret", testSecret},
+		"bang in user":       {"url", "pve", "token_id", "a!b@pve!inventory", "token_secret", testSecret},
+		"@ in token name":    {"url", "pve", "token_id", "homedex@pve!inv@entory", "token_secret", testSecret},
 		"no secret":          {"url", "pve", "token_id", testTokenID},
 		"spaced secret":      {"url", "pve", "token_id", testTokenID, "token_secret", testSecret + " extra"},
 		"short fingerprint":  {"url", "pve", "token_id", testTokenID, "token_secret", testSecret, "fingerprint", "AB:CD"},
@@ -663,6 +702,101 @@ func TestSelectAddresses(t *testing.T) {
 		address, aliases := selectAddresses(tc.in)
 		if address != tc.address || !reflect.DeepEqual(aliases, tc.aliases) {
 			t.Errorf("%s: %q %v, want %q %v", name, address, aliases, tc.address, tc.aliases)
+		}
+	}
+}
+
+// A guest's root user chooses its address list. However long it is, one guest
+// contributes at most maxGuestAddresses, the same ones on every scan.
+func TestGuestAddressesAreCapped(t *testing.T) {
+	type ip = struct {
+		IPAddress string `json:"ip-address"`
+	}
+	var eth0, eth1 []ip
+	for i := 999; i >= 0; i-- {
+		eth1 = append(eth1, ip{fmt.Sprintf("10.1.%d.%d", i/250, i%250+1)})
+		eth0 = append(eth0, ip{fmt.Sprintf("10.0.%d.%d", i/250, i%250+1)}, ip{fmt.Sprintf("10.0.%d.%d", i/250, i%250+1)})
+	}
+	ifaces := []guestInterface{{Name: "eth1", IPAddresses: &eth1}, {Name: "eth0", IPAddresses: &eth0}}
+	address, aliases := selectAddresses(ifaces)
+	if address != "10.0.0.1" {
+		t.Fatalf("address = %q, want the lowest on the first interface", address)
+	}
+	want := make([]string, 0, maxGuestAddresses-1)
+	for i := 2; i <= maxGuestAddresses; i++ {
+		want = append(want, fmt.Sprintf("10.0.0.%d", i))
+	}
+	if !reflect.DeepEqual(aliases, want) {
+		t.Fatalf("aliases = %v, want %v", aliases, want)
+	}
+
+	// The same holds end to end, for an agent reply near the body limit.
+	var reply []string
+	for i := 0; i < 60000; i++ {
+		reply = append(reply, fmt.Sprintf(`{"ip-address":"10.%d.%d.%d","ip-address-type":"ipv4","prefix":8}`, i/62500, i/250%250, i%250+1))
+	}
+	routes := clusterRoutes(t)
+	routes[agentPath("pve1", 101)] = body(`{"data":{"result":[{"name":"eth0","ip-addresses":[` + strings.Join(reply, ",") + `]}]}}`)
+	snap, err := New().Scan(context.Background(), pinned(newPVE(t, routes).Server))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range snap.Hosts {
+		if h.Key == "qemu:101" && (h.Address == "" || len(h.Aliases) != maxGuestAddresses-1) {
+			t.Fatalf("qemu:101: address %q and %d aliases, want %d addresses in all", h.Address, len(h.Aliases), maxGuestAddresses)
+		}
+	}
+}
+
+// With a proxy configured, plain http to loopback still never leaves the
+// machine: it carries the token in cleartext. https keeps the proxy.
+func TestPlainHTTPNeverUsesAProxy(t *testing.T) {
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxied.Add(1)
+		http.Error(w, "proxied", http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("http_proxy", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+
+	plain := httptest.NewServer(newPVE(t, clusterRoutes(t)).Config.Handler)
+	defer plain.Close()
+	port := plain.URL[strings.LastIndex(plain.URL, ":")+1:]
+	for _, host := range []string{"localhost.", "LOCALHOST", "127.0.0.1"} {
+		raw := cfg("url", "http://"+host+":"+port, "token_id", testTokenID, "token_secret", testSecret)
+		s, err := decode(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", host, err)
+		}
+		a, done := newAPI(s)
+		done()
+		if a.client.Transport.(*http.Transport).Proxy != nil {
+			t.Errorf("%s: plain http is routed through the environment's proxy", host)
+		}
+		if err = New().Validate(context.Background(), raw); err != nil {
+			t.Errorf("%s: %v", host, err)
+		}
+	}
+	if n := proxied.Load(); n != 0 {
+		t.Fatalf("the proxy received %d requests carrying the token in cleartext", n)
+	}
+
+	s, err := decode(cfg("url", "https://pve.lab.example:8006", "token_id", testTokenID, "token_secret", testSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, done := newAPI(s)
+	done()
+	if a.client.Transport.(*http.Transport).Proxy == nil {
+		t.Error("https no longer honours the environment's proxy settings")
+	}
+
+	for addr, allowed := range map[string]bool{"127.0.0.1:8006": true, "[::1]:8006": true, "127.0.0.9:80": true, "192.0.2.10:8006": false, "[2001:db8::1]:8006": false, "localhost:8006": false} {
+		if err := loopbackOnly("tcp", addr, nil); (err == nil) != allowed {
+			t.Errorf("dial %s: err = %v, want allowed=%v", addr, err, allowed)
 		}
 	}
 }

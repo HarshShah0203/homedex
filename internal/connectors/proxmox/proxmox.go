@@ -204,19 +204,19 @@ func (c *Connector) readGuests(ctx context.Context, a *api, guests []guest, agen
 	}
 	fanCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
+	// Stopped guests are settled before any call, so the budget running out
+	// part way through the list never leaves one holding the addresses it had
+	// while it ran.
+	for i, g := range guests {
+		if g.status == "stopped" {
+			out[i] = guestIPs{known: true}
+		}
+	}
 	slots := make(chan struct{}, workers)
 	var wg sync.WaitGroup
 dispatch:
 	for i, g := range guests {
-		switch g.status {
-		case "stopped":
-			out[i] = guestIPs{known: true}
-			continue
-		case "running":
-			if g.kind == "qemu" && !agent {
-				continue
-			}
-		default:
+		if g.status != "running" || (g.kind == "qemu" && !agent) {
 			continue
 		}
 		select {
@@ -272,9 +272,15 @@ func parseAddr(s string) (netip.Addr, bool) {
 	return a, usable
 }
 
+// maxGuestAddresses bounds what one guest contributes, its address included.
+// The list comes from inside the guest, whose root user can report any number
+// of addresses; each would be stored, indexed and diffed on every scan.
+const maxGuestAddresses = 16
+
 // selectAddresses picks a guest's address and aliases deterministically. IPv6
 // counts only for a guest with no IPv4 at all: temporary IPv6 addresses rotate
-// daily and would file an alias change each time.
+// daily and would file an alias change each time. Past maxGuestAddresses the
+// rest are dropped, in the same interface-then-address order.
 func selectAddresses(ifaces []guestInterface) (string, []string) {
 	type found struct {
 		iface string
@@ -322,6 +328,9 @@ func selectAddresses(ifaces []guestInterface) (string, []string) {
 	var aliases []string
 	seen := map[string]bool{address: true}
 	for _, f := range chosen[1:] {
+		if len(aliases) == maxGuestAddresses-1 {
+			break
+		}
 		if a := f.addr.String(); !seen[a] {
 			seen[a] = true
 			aliases = append(aliases, a)

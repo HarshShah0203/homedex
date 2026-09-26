@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/HarshShah0203/homedex/internal/connectors"
@@ -32,11 +33,19 @@ type api struct {
 
 // newAPI builds a client of its own for one scan: TLS verified as configured,
 // redirects never followed (a redirect would resend the token wherever it
-// points), and idle connections closed when the scan is done.
+// points), and idle connections closed when the scan is done. Plain http,
+// which carries the token in cleartext, never goes through a proxy and only
+// ever connects to a loopback address.
 func newAPI(s settings) (*api, func()) {
+	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	proxy := http.ProxyFromEnvironment
+	if !s.https {
+		proxy = nil
+		dialer.Control = loopbackOnly
+	}
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		Proxy:                 proxy,
+		DialContext:           dialer.DialContext,
 		TLSClientConfig:       tlsConfig(s),
 		TLSHandshakeTimeout:   10 * time.Second,
 		MaxIdleConnsPerHost:   defaultGuestWorkers,
@@ -47,6 +56,16 @@ func newAPI(s settings) (*api, func()) {
 	client.Transport = transport
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &api{client: client, base: s.base, auth: s.auth}, transport.CloseIdleConnections
+}
+
+// loopbackOnly refuses a plain http connection to anything but loopback, in
+// case "localhost" resolves somewhere else.
+func loopbackOnly(_, address string, _ syscall.RawConn) error {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil || !ap.Addr().Unmap().IsLoopback() {
+		return errors.New("plain http to Proxmox is allowed only to a loopback address, and the host name resolved elsewhere")
+	}
+	return nil
 }
 
 // pveBool decodes a schema boolean. Proxmox emits them from Perl integers, so
