@@ -6,12 +6,16 @@
 
 Point Homedex at Docker and a supported reverse proxy to build a searchable record of services, hosts, ports, routes, certificates, domains, and changes.
 
+**[Live demo](https://harshshah0203.github.io/homedex/)** (fabricated data, nothing to install) · [Quickstart](#quickstart) · [Write a connector](#write-a-connector)
+
 [![CI](https://github.com/HarshShah0203/homedex/actions/workflows/ci.yml/badge.svg)](https://github.com/HarshShah0203/homedex/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 </div>
 
 Homedex is **the ledger, not the map**: it answers “what runs where?” from observed infrastructure instead of asking you to maintain another spreadsheet. It does not start, stop, or reconfigure containers.
+
+New connectors ship in tagged releases. To hear about them, choose **Watch > Custom > Releases** at the top of this page.
 
 ![The Homedex services ledger — every service, image, route, host, and port, discovered from Docker and your reverse proxy](docs/screenshots/services.png)
 
@@ -23,21 +27,32 @@ Homedex is **the ledger, not the map**: it answers “what runs where?” from o
 
 ## Quickstart
 
-The default Compose stack builds locally, binds the UI to loopback, gives Homedex a persistent data volume, and puts a filtering proxy between Homedex and the Docker socket.
+All you need is Docker with Compose v2. Download one file and start it; there is nothing to clone or build:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/HarshShah0203/homedex/main/docker-compose.yml
+docker compose up -d
+```
+
+The stack pulls the published multi-arch image (`linux/amd64`, `linux/arm64`, `linux/arm/v7`), binds the UI to loopback, gives Homedex a persistent data volume, and puts a filtering proxy between Homedex and the Docker socket.
+
+Open <http://127.0.0.1:7377>. The setup wizard creates your admin password, connects the first source (the compose stack's socket proxy at `tcp://docker-socket-proxy:2375` is prefilled), tests it read-only, and runs the first scan live. Your services, ports, and hosts appear in about a minute.
+
+If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose. The file follows the newest `0.1.x` image; set `HOMEDEX_VERSION` (for example `0.1.5`) to pin a release, and upgrade with `docker compose pull` followed by `docker compose up -d`.
+
+The UI is reachable from this machine only. To open it from other machines on your LAN, start it with `HOMEDEX_BIND=0.0.0.0 docker compose up -d` and finish the setup wizard straight away: until an admin password exists, whoever reaches the page first sets it.
+
+Prefer automation? From a checkout, `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, nginx config files, SSH hosts, Tailscale, TLS, RDAP, and remote Docker sources. Every one of them can also be added in the UI under **Sources**.
+
+### Build from source
 
 ```sh
 git clone https://github.com/HarshShah0203/homedex.git
 cd homedex
-docker compose up -d --build
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-Open <http://127.0.0.1:7377>. The setup wizard creates your admin password, connects the first source (the compose stack's socket proxy at `tcp://docker-socket-proxy:2375` is prefilled), tests it read-only, and runs the first scan live — your services, ports, and hosts appear in about a minute.
-
-If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose.
-
-The UI is reachable from this machine only. To open it from other machines on your LAN, start it with `HOMEDEX_BIND=0.0.0.0 docker compose up -d --build` and finish the setup wizard straight away: until an admin password exists, whoever reaches the page first sets it.
-
-Prefer automation? `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, nginx config files, SSH hosts, Tailscale, TLS, RDAP, and remote Docker sources — all of which can also be added in the UI under **Sources**.
+The override builds the image from your checkout and keeps every hardening setting of the default file. [Build and test](#build-and-test) covers native builds.
 
 ### Why the socket proxy matters
 
@@ -55,7 +70,9 @@ curl -fsS http://127.0.0.1:7377/api/health
 # open http://127.0.0.1:7377
 ```
 
-It seeds the real SQLite schema and API with 3 hosts, 12 services, 16 port allocations, 10 routes, 4 certificates, and 1 domain. Nine routes resolve through network aliases or a published host port; one intentionally broken route exercises the failure state. There is no hosted demo domain. See [demo/README.md](demo/README.md) for reset and native-binary commands.
+It seeds the real SQLite schema and API with 3 hosts, 12 services, 16 port allocations, 10 routes, 4 certificates, and 1 domain. Nine routes resolve through network aliases or a published host port; one intentionally broken route exercises the failure state. See [demo/README.md](demo/README.md) for reset and native-binary commands.
+
+The hosted [live demo](https://harshshah0203.github.io/homedex/) is different: it runs the same UI entirely in your browser on its own fabricated inventory, with no server behind it, so anything that would write, test, or scan is turned off.
 
 ## Implemented in v0.1
 
@@ -100,6 +117,22 @@ These tools can be complementary. Homedex is not a topology visualizer, monitor,
 - The image target is **under 30 MiB**, with a **40 MiB hard CI limit**.
 
 Read [SECURITY.md](SECURITY.md), [backup and data handling](docs/BACKUP_AND_DATA.md), and [deployment security](docs/SECURITY_DEPLOYMENT.md) before exposing the UI beyond localhost.
+
+## Write a connector
+
+Every source is a Go package under `internal/connectors` that implements three methods:
+
+```go
+type Connector interface {
+    Kind() string
+    Validate(context.Context, Config) error
+    Scan(context.Context, Config) (domain.Snapshot, error)
+}
+```
+
+A connector returns a complete `Snapshot` of what it observed and never writes the database; the engine owns persistence, diffing, and route reconciliation. It only ever reads from the system it connects to. The smallest API connector, [`internal/connectors/caddy/caddy.go`](internal/connectors/caddy/caddy.go), is about 110 lines.
+
+Work through the [connector checklist in CONTRIBUTING.md](CONTRIBUTING.md#connector-shape) before opening a pull request: stable natural keys, bounded requests, context cancellation, scrubbed fixtures, and tests for both success and malformed input. Issues labelled [good first issue](https://github.com/HarshShah0203/homedex/labels/good%20first%20issue) are a good place to start.
 
 ## Build and test
 

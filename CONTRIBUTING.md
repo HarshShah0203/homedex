@@ -45,6 +45,8 @@ The default `docker-compose.yml` pulls the published image. To run the full stac
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
+`npm --prefix web run build:demo` builds the static live demo (fabricated data, no backend) into `web/dist-demo`, which the Pages workflow publishes from `main`. It never touches the embedded assets.
+
 `make check` includes the Docker-environment ingestion tripwire and hardened Compose assertions. The CI workflow additionally uses the race detector and enforces binary/image budgets.
 
 ## Connector shape
