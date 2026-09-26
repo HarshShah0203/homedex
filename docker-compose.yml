@@ -51,11 +51,20 @@ services:
       - docker-socket-proxy
     ports:
       # Loopback by default: until setup completes, whoever reaches the UI first
-      # sets the admin password. HOMEDEX_BIND=0.0.0.0 opens it to the LAN.
+      # sets the admin password. HOMEDEX_BIND=0.0.0.0 opens it to the LAN; set
+      # HOMEDEX_ADMIN_PASSWORD with it so the setup page is never open to others.
       - "${HOMEDEX_BIND:-127.0.0.1}:${HOMEDEX_PORT:-7377}:7377"
     environment:
       HOMEDEX_DATA_DIR: /data
       HOMEDEX_LISTEN: :7377
+      # Optional, empty by default (the setup wizard then creates the admin).
+      # On a first start with no admin yet, Homedex stores only the Argon2id
+      # hash of this password; one shorter than 12 characters stops startup
+      # with an error. Once an admin exists the value is ignored and never
+      # replaces it, so it can be dropped after the first start. To keep it out
+      # of `docker inspect`, set HOMEDEX_ADMIN_PASSWORD_FILE to a mounted secret
+      # instead (docs/SECURITY_DEPLOYMENT.md). The value is never logged.
+      HOMEDEX_ADMIN_PASSWORD: ${HOMEDEX_ADMIN_PASSWORD:-}
     volumes:
       - homedex-data:/data
     read_only: true

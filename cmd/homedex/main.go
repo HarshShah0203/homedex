@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -70,6 +71,9 @@ func run() error {
 		return err
 	}
 	defer st.Close()
+	if err = bootstrapAdminFromEnv(ctx, st, slog.Default()); err != nil {
+		return err
+	}
 	broker := server.NewBroker()
 	registry := connectors.NewRegistry()
 	for _, c := range []connectors.Connector{docker.New(), traefik.New(), caddy.New(), npm.New(), nginx.New(), tlsprobe.New(), rdap.New(), imageregistry.New(), sshexec.New(), tailscale.New(), proxmox.New()} {
@@ -139,6 +143,90 @@ func isLoopbackListen(addr string) bool {
 		return ip.IsLoopback()
 	}
 	return false
+}
+
+const (
+	adminPasswordEnv     = "HOMEDEX_ADMIN_PASSWORD"
+	adminPasswordFileEnv = "HOMEDEX_ADMIN_PASSWORD_FILE"
+	// maxAdminPasswordFile bounds how much of a mounted secret file is read.
+	maxAdminPasswordFile = 4096
+)
+
+// bootstrapAdminFromEnv sets the first admin password from HOMEDEX_ADMIN_PASSWORD
+// or HOMEDEX_ADMIN_PASSWORD_FILE, so an instance an app store publishes on the
+// LAN is not waiting for whoever opens the setup page first. It never replaces
+// an existing admin and never logs or returns the password itself.
+func bootstrapAdminFromEnv(ctx context.Context, st *store.Store, logger *slog.Logger) error {
+	password, source, err := adminPasswordFromEnv()
+	if err != nil {
+		return err
+	}
+	if source == "" {
+		return nil
+	}
+	outcome, err := server.BootstrapAdmin(ctx, st, password)
+	if err != nil {
+		return fmt.Errorf("%s was refused: %w", source, err)
+	}
+	switch outcome {
+	case server.AdminCreated:
+		logger.Info("admin password set from the environment", "variable", source)
+	case server.AdminAlreadyExists:
+		logger.Info("an admin password already exists, so the environment value is ignored and the stored password is unchanged", "variable", source)
+	}
+	return nil
+}
+
+// adminPasswordFromEnv returns the configured bootstrap password and the name
+// of the variable it came from; an empty source means neither is set. Both
+// variables are removed from the process environment once read, so child
+// processes such as the ssh client never inherit them.
+func adminPasswordFromEnv() (password, source string, err error) {
+	direct := os.Getenv(adminPasswordEnv)
+	file := strings.TrimSpace(os.Getenv(adminPasswordFileEnv))
+	_ = os.Unsetenv(adminPasswordEnv)
+	_ = os.Unsetenv(adminPasswordFileEnv)
+	switch {
+	case direct != "" && file != "":
+		return "", "", fmt.Errorf("set %s or %s, not both", adminPasswordEnv, adminPasswordFileEnv)
+	case file != "":
+		value, err := readAdminPasswordFile(file)
+		if err != nil {
+			return "", "", err
+		}
+		return value, adminPasswordFileEnv, nil
+	case direct != "":
+		return direct, adminPasswordEnv, nil
+	}
+	return "", "", nil
+}
+
+// readAdminPasswordFile reads a secret file such as a Docker or Compose secret.
+// Exactly one trailing newline (LF or CRLF) is removed, because most editors
+// and `echo` add one; any other whitespace is part of the password.
+func readAdminPasswordFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", adminPasswordFileEnv, err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxAdminPasswordFile+1))
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", adminPasswordFileEnv, err)
+	}
+	if len(data) > maxAdminPasswordFile {
+		return "", fmt.Errorf("%s points at a file larger than %d bytes", adminPasswordFileEnv, maxAdminPasswordFile)
+	}
+	value := string(data)
+	if strings.HasSuffix(value, "\r\n") {
+		value = strings.TrimSuffix(value, "\r\n")
+	} else {
+		value = strings.TrimSuffix(value, "\n")
+	}
+	if value == "" {
+		return "", fmt.Errorf("%s points at an empty file", adminPasswordFileEnv)
+	}
+	return value, nil
 }
 
 func envString(key, def string) string {

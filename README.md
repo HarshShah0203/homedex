@@ -46,7 +46,15 @@ Open <http://127.0.0.1:7377>. The setup wizard creates your admin password, conn
 
 If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose. The file follows the newest `0.2.x` image; set `HOMEDEX_VERSION` (for example `0.2.0`) to pin a release, and upgrade with `docker compose pull` followed by `docker compose up -d`.
 
-The UI is reachable from this machine only. To open it from other machines on your LAN, start it with `HOMEDEX_BIND=0.0.0.0 docker compose up -d` and finish the setup wizard straight away: until an admin password exists, whoever reaches the page first sets it.
+The UI is reachable from this machine only. To open it from other machines on your LAN, set the admin password as you start it, so the setup page is never open to whoever reaches it first:
+
+```sh
+read -rs HOMEDEX_ADMIN_PASSWORD   # type a passphrase of 12 or more characters, then Enter
+export HOMEDEX_ADMIN_PASSWORD
+HOMEDEX_BIND=0.0.0.0 docker compose up -d
+```
+
+On first start Homedex stores only the password's Argon2id hash, logs that it was set from the environment (never the value), and the wizard then opens at sign-in and continues with your first source. An existing admin is never replaced, so later starts ignore the variable. **App-store installs** (Portainer templates and NAS app catalogs) publish the UI on the LAN straight away: fill in their admin password field. `HOMEDEX_ADMIN_PASSWORD_FILE` reads the password from a mounted secret file instead; see [deployment security](docs/SECURITY_DEPLOYMENT.md#setting-the-admin-password-at-startup). Without either, finish the setup wizard straight away after widening the bind.
 
 Prefer automation? From a checkout, `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, nginx config files, SSH hosts, Tailscale, Proxmox VE, TLS, RDAP, image update checks, and remote Docker sources. Every one of them can also be added in the UI under **Sources**.
 
