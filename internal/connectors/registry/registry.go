@@ -130,14 +130,26 @@ func (c *Connector) Validate(ctx context.Context, raw connectors.Config) error {
 	domains := c.testDomains(cfg)
 	s := c.session(cfg)
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	var pings sync.WaitGroup
+	// Passing early cancels the other pings. Wait for them to finish, so a
+	// connection attempt they abandoned is never handed by the shared
+	// transport to a later request for the same host, which would then fail
+	// with this call's cancellation.
+	defer func() {
+		cancel()
+		pings.Wait()
+	}()
 	type answer struct {
 		i   int
 		err error
 	}
 	answers := make(chan answer, len(domains))
 	for i, domain := range domains {
-		go func(i int, domain string) { answers <- answer{i, s.ping(ctx, domain)} }(i, domain)
+		pings.Add(1)
+		go func(i int, domain string) {
+			defer pings.Done()
+			answers <- answer{i, s.ping(ctx, domain)}
+		}(i, domain)
 	}
 	errs := make([]error, len(domains))
 	for range domains {
