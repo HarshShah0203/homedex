@@ -145,7 +145,7 @@ Config keys:
 
 Homedex GETs `/api/version`, `/api/entrypoints`, `/api/http/routers`, and `/api/http/services`. It parses `Host(...)` and `PathPrefix(...)`, then follows load-balancer server URLs.
 
-Enable Traefik's API only on a private management entrypoint/network. Prefer authentication middleware or a private network over publishing an unauthenticated dashboard port. The optional basic-auth or header fields support deployments that already protect the API; the supplied header value is sensitive connector config.
+Enable Traefik's API only on a private management entrypoint/network. Prefer authentication middleware or a private network over publishing an unauthenticated dashboard port. The optional basic-auth or header fields support deployments that already protect the API; the supplied header value is sensitive connector config. When either is set, Homedex does not follow a redirect, so a credential is never resent to another host or over plain HTTP: point `url` straight at the API, or the scan fails with "Traefik API returned 301 Moved Permanently; Homedex does not follow a redirect with credentials, check the URL".
 
 ## Caddy
 
@@ -171,7 +171,7 @@ Config:
 }
 ```
 
-Homedex authenticates with `POST /api/tokens`, caches the returned JWT, refreshes it once on `401`, and GETs `/api/nginx/proxy-hosts` plus `/api/nginx/certificates`. It does not create or modify NPM objects.
+Homedex authenticates with `POST /api/tokens`, caches the returned JWT, refreshes it once on `401`, and GETs `/api/nginx/proxy-hosts` plus `/api/nginx/certificates`. It does not create or modify NPM objects. Those GETs carry the JWT, so they never follow a redirect: point `url` straight at the NPM API.
 
 Use a dedicated account and restrict the NPM API network path. NPM role granularity varies by version; verify the effective permissions in your installation rather than assuming the account is enforced read-only.
 

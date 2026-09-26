@@ -151,26 +151,59 @@ func TestRequestHelpersRejectMalformedAndOversizedBodies(t *testing.T) {
 	}
 }
 
-func TestPostHelpersNeverFollowRedirects(t *testing.T) {
+var redirectCodes = []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect}
+
+// credentialOptions are the options that put a credential in a request.
+var credentialOptions = map[string]Option{
+	"WithHeader":      WithHeader("X-API-Key", "unraid-key"),
+	"WithBearerToken": WithBearerToken("tok"),
+	"WithBasicAuth":   WithBasicAuth("admin", "app-secret"),
+}
+
+// redirectTarget is a second server that counts every request reaching it.
+// It shares 127.0.0.1 with the redirecting server, so Go would resend even
+// Authorization to it, and a custom header such as X-API-Key goes to any host.
+func redirectTarget(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
 	var landed atomic.Int32
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		landed.Add(1)
 		_, _ = io.WriteString(w, `{"valid":true}`)
 	}))
-	defer elsewhere.Close()
-	for _, code := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, elsewhere.URL+"/steal", code)
-		}))
+	t.Cleanup(elsewhere.Close)
+	return elsewhere, &landed
+}
+
+func redirectingServer(target string, code int) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target+"/steal", code)
+	}))
+}
+
+// wantRefusedRedirect checks err is the StatusError for a redirect that was
+// not followed.
+func wantRefusedRedirect(t *testing.T, name string, code int, err error) {
+	t.Helper()
+	var se *StatusError
+	if !errors.As(err, &se) || se.StatusCode != code || !se.RedirectRefused {
+		t.Errorf("%s %d: err = %#v, want a refused %d redirect", name, code, err, code)
+		return
+	}
+	if want := "Unraid API returned " + se.Status + "; Homedex does not follow a redirect with credentials, check the URL"; err.Error() != want {
+		t.Errorf("%s %d: message %q, want %q", name, code, err.Error(), want)
+	}
+}
+
+func TestPostHelpersNeverFollowRedirects(t *testing.T) {
+	elsewhere, landed := redirectTarget(t)
+	for _, code := range redirectCodes {
+		srv := redirectingServer(elsewhere.URL, code)
 		// The shared client follows redirects for GETs; the POST helpers must not.
 		client := Client(time.Second)
 		for _, name := range []string{"PostJSON", "PostForm"} {
 			var got answer
-			err := requestKinds[name](context.Background(), client, srv.URL, &got, WithLabel("AdGuard Home"))
-			var se *StatusError
-			if !errors.As(err, &se) || se.StatusCode != code {
-				t.Errorf("%s %d: err = %v, want a %d StatusError", name, code, err, code)
-			}
+			err := requestKinds[name](context.Background(), client, srv.URL, &got, WithLabel("Unraid"))
+			wantRefusedRedirect(t, name, code, err)
 		}
 		if client.CheckRedirect != nil {
 			t.Errorf("%d: the caller's client was changed", code)
@@ -179,6 +212,41 @@ func TestPostHelpersNeverFollowRedirects(t *testing.T) {
 	}
 	if n := landed.Load(); n != 0 {
 		t.Fatalf("the redirect target received %d requests", n)
+	}
+}
+
+func TestGetJSONWithACredentialNeverFollowsRedirects(t *testing.T) {
+	elsewhere, landed := redirectTarget(t)
+	for _, code := range redirectCodes {
+		srv := redirectingServer(elsewhere.URL, code)
+		client := Client(time.Second)
+		for name, opt := range credentialOptions {
+			var got answer
+			err := GetJSON(context.Background(), client, srv.URL, &got, WithLabel("Unraid"), opt)
+			wantRefusedRedirect(t, "GetJSON "+name, code, err)
+		}
+		if client.CheckRedirect != nil {
+			t.Errorf("%d: the caller's client was changed", code)
+		}
+		srv.Close()
+	}
+	if n := landed.Load(); n != 0 {
+		t.Fatalf("the redirect target received %d requests carrying a credential", n)
+	}
+}
+
+func TestGetJSONWithoutACredentialFollowsRedirects(t *testing.T) {
+	elsewhere, landed := redirectTarget(t)
+	for _, code := range redirectCodes {
+		srv := redirectingServer(elsewhere.URL, code)
+		var got answer
+		if err := GetJSON(context.Background(), Client(time.Second), srv.URL, &got, WithLabel("RDAP")); err != nil || !got.Valid {
+			t.Errorf("%d: GetJSON = %+v, %v, want the redirect followed", code, got, err)
+		}
+		srv.Close()
+	}
+	if n := landed.Load(); n != int32(len(redirectCodes)) {
+		t.Fatalf("the redirect target received %d requests, want %d", n, len(redirectCodes))
 	}
 }
 
