@@ -23,7 +23,7 @@ New connectors ship in tagged releases. To hear about them, choose **Watch > Cus
 |---|---|
 | ![Routes register](docs/screenshots/routes.png) | ![Expiry register](docs/screenshots/expiry.png) |
 
-> **v0.1 status:** the discovery engine, authenticated API, scheduled reconciliation, change feed, route resolution, TLS/RDAP connectors, exports, read-only shares, notifications, manual records/metadata, setup wizard, and embedded Svelte inventory UI are implemented and wired end to end.
+> **Status:** the discovery engine, authenticated API, scheduled reconciliation, change feed, route resolution, TLS/RDAP connectors, exports, read-only shares, notifications, manual records/metadata, setup wizard, and embedded Svelte inventory UI are implemented and wired end to end.
 
 ## Quickstart
 
@@ -42,7 +42,7 @@ The stack pulls the published multi-arch image (`linux/amd64`, `linux/arm64`, `l
 
 Open <http://127.0.0.1:7377>. The setup wizard creates your admin password, connects the first source (the compose stack's socket proxy at `tcp://docker-socket-proxy:2375` is prefilled), tests it read-only, and runs the first scan live. Your services, ports, and hosts appear in about a minute.
 
-If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose. The file follows the newest `0.1.x` image; set `HOMEDEX_VERSION` (for example `0.1.5`) to pin a release, and upgrade with `docker compose pull` followed by `docker compose up -d`.
+If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose. The file follows the newest `0.2.x` image; set `HOMEDEX_VERSION` (for example `0.2.0`) to pin a release, and upgrade with `docker compose pull` followed by `docker compose up -d`.
 
 The UI is reachable from this machine only. To open it from other machines on your LAN, start it with `HOMEDEX_BIND=0.0.0.0 docker compose up -d` and finish the setup wizard straight away: until an admin password exists, whoever reaches the page first sets it.
 
@@ -78,7 +78,7 @@ It seeds the real SQLite schema and API with 3 hosts, 12 services, 16 port alloc
 
 The hosted [live demo](https://harshshah0203.github.io/homedex/) is different: it runs the same UI entirely in your browser on its own fabricated inventory, with no server behind it, so anything that would write, test, or scan is turned off.
 
-## Implemented in v0.1
+## Implemented
 
 | Area | Current behavior |
 |---|---|

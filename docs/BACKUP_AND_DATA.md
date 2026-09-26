@@ -58,7 +58,7 @@ If the backup used `HOMEDEX_SECRET`, restore that exact secret before startup. H
 
 1. Back up `/data` before replacing a binary/image.
 2. Read release notes for migrations or behavior changes.
-3. Pin a release tag instead of relying on a moving tag. The default `docker-compose.yml` follows the newest `0.1.x` image; set `HOMEDEX_VERSION=0.1.5` (or another published tag) to hold an exact release.
+3. Pin a release tag instead of relying on a moving tag. The default `docker-compose.yml` follows the newest `0.2.x` image; set `HOMEDEX_VERSION=0.2.0` (or another published tag) to hold an exact release.
 4. Pull and start the new version with `docker compose pull` and `docker compose up -d`, then check `/api/health`, connector status, and representative inventory counts.
 
 Migrations apply automatically and are forward-only. Rolling the binary back after a migration is not guaranteed. Restore the pre-upgrade data backup when rolling back.

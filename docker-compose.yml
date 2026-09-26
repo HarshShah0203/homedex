@@ -9,7 +9,7 @@
 # Use a new, empty directory: the download replaces any docker-compose.yml
 # there, and Compose also reads a .env or docker-compose.override.yml beside it.
 #
-# HOMEDEX_VERSION pins a release (default: the newest 0.1.x). To build from a
+# HOMEDEX_VERSION pins a release (default: the newest 0.2.x). To build from a
 # checkout instead, add docker-compose.build.yml:
 #   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 name: homedex
@@ -45,7 +45,7 @@ services:
       - discovery
 
   homedex:
-    image: ghcr.io/harshshah0203/homedex:${HOMEDEX_VERSION:-0.1}
+    image: ghcr.io/harshshah0203/homedex:${HOMEDEX_VERSION:-0.2}
     restart: unless-stopped
     depends_on:
       - docker-socket-proxy

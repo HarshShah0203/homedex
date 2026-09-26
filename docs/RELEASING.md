@@ -14,7 +14,7 @@ Archives include the binary, license, core operational docs, SHA-256 checksums, 
 
 The workflow does not publish a Docker Hub mirror. Do not document one unless a tested publishing job and credentials are added.
 
-The default `docker-compose.yml` pulls `ghcr.io/harshshah0203/homedex:${HOMEDEX_VERSION:-0.1}`, so every `0.1.x` release reaches new installs and `docker compose pull` without a file change. When a release starts a new minor line, bump that default only after the release workflow has published the image; until then, new installs from `main` would try to pull a tag that does not exist yet.
+The default `docker-compose.yml` pulls `ghcr.io/harshshah0203/homedex:${HOMEDEX_VERSION:-0.2}`, so every `0.2.x` release reaches new installs and `docker compose pull` without a file change. When a release starts a new minor line, bump that default only after the release workflow has published the image; until then, new installs from `main` would try to pull a tag that does not exist yet.
 
 ## Budgets
 
@@ -71,7 +71,7 @@ git tag -a v0.1.0 -m "Homedex v0.1.0"
 git push origin v0.1.0
 ```
 
-The GitHub Actions `Release` workflow creates the GitHub release and package. Verify archives, checksums, SBOMs, image architectures, image startup, and the release page before announcing availability. Then check the pull-only install from an empty directory. The separate project name keeps the check away from any Homedex already running on the same machine, and the explicit pull matters: Compose only pulls a missing image by default, so a machine that ran an earlier check would otherwise start the cached `0.1` image and never test the new one:
+The GitHub Actions `Release` workflow creates the GitHub release and package. Verify archives, checksums, SBOMs, image architectures, image startup, and the release page before announcing availability. Then check the pull-only install from an empty directory. The separate project name keeps the check away from any Homedex already running on the same machine, and the explicit pull matters: Compose only pulls a missing image by default, so a machine that ran an earlier check would otherwise start the cached image of that line and never test the new one:
 
 ```sh
 mkdir homedex-release-check
@@ -84,6 +84,6 @@ curl -fsS http://127.0.0.1:17390/api/version
 docker compose -p homedex-release-check down -v
 ```
 
-`/api/version` must report the tag you just pushed (for example `{"version":"v0.1.6"}`) whenever that tag is on the line the default file follows. An older version means the moving tag has not been published yet or the pull was skipped, so the check has not tested this release.
+`/api/version` must report the tag you just pushed (for example `{"version":"v0.2.0"}`) whenever that tag is on the line the default file follows. An older version means the moving tag has not been published yet or the pull was skipped, so the check has not tested this release.
 
 GoReleaser marks semantic prerelease tags as prereleases automatically. A configured workflow is not evidence that any particular tag or package already exists.
