@@ -208,11 +208,11 @@ func wantRefusedRedirect(t *testing.T, name string, code int, err error) {
 	}
 }
 
-func TestPostHelpersNeverFollowRedirects(t *testing.T) {
+func TestPostHelpersRefuseRedirectsThatStayOnPlainHTTP(t *testing.T) {
 	elsewhere, landed := redirectTarget(t)
 	for _, code := range redirectCodes {
-		// Even a redirect to the same host is refused: a 307 or 308 would
-		// resend the body.
+		// Even a redirect to the same host is refused when it stays on plain
+		// HTTP: a 307 or 308 would resend the body in the clear.
 		srv := redirectingServer(elsewhere.URL, code)
 		// The shared client follows redirects for GETs; the POST helpers must not.
 		client := Client(time.Second)
@@ -228,6 +228,50 @@ func TestPostHelpersNeverFollowRedirects(t *testing.T) {
 	}
 	if n := landed.Load(); n != 0 {
 		t.Fatalf("the redirect target received %d requests", n)
+	}
+}
+
+// An NPM source configured as http:// behind a proxy that upgrades it with a
+// 307 or 308: the password still reaches only the host it was configured for,
+// now encrypted, so the POST follows. The same upgrade to another host name
+// is refused and never receives the body.
+func TestPostHelpersFollowOnlyASameHostUpgradeToHTTPS(t *testing.T) {
+	var bodies atomic.Int32
+	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			bodies.Add(1)
+		}
+		_, _ = io.WriteString(w, `{"valid":true}`)
+	}))
+	defer api.Close()
+	for _, code := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		for _, target := range []struct {
+			name   string
+			url    string
+			follow bool
+		}{{"same host", api.URL, true}, {"other host", otherHost(t, api.URL), false}} {
+			entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target.url+r.URL.Path, code)
+			}))
+			client := api.Client()
+			client.Timeout = time.Second
+			for _, name := range []string{"PostJSON", "PostForm"} {
+				before := bodies.Load()
+				var got answer
+				err := requestKinds[name](context.Background(), client, entry.URL+"/api/tokens", &got, WithLabel("Unraid"))
+				if target.follow {
+					if err != nil || !got.Valid || bodies.Load() != before+1 {
+						t.Errorf("%s %s %d: %+v, %v, want the upgrade followed with the body", name, target.name, code, got, err)
+					}
+					continue
+				}
+				wantRefusedRedirect(t, name+" "+target.name, code, err)
+				if bodies.Load() != before {
+					t.Errorf("%s %s %d: another host received the body", name, target.name, code)
+				}
+			}
+			entry.Close()
+		}
 	}
 }
 

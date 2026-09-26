@@ -69,8 +69,9 @@ func (c *Connector) token(ctx context.Context, x config) (string, error) {
 	var v struct {
 		Token string `json:"token"`
 	}
-	// The body carries the NPM password, so PostJSON never follows a
-	// redirect with it and bounds the answer like every other request.
+	// The body carries the NPM password, so PostJSON follows a redirect with
+	// it only to the same host over HTTPS, and bounds the answer like every
+	// other request.
 	e := connectors.PostJSON(ctx, c.Client, strings.TrimRight(x.URL, "/")+"/api/tokens",
 		map[string]string{"identity": x.Email, "secret": x.Password}, &v, connectors.WithLabel("NPM token"))
 	if e == nil {

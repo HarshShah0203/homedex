@@ -32,7 +32,8 @@ const MaxResponseBytes = 8 << 20
 // Client returns an *http.Client with an explicit timeout. A non-positive
 // timeout falls back to DefaultTimeout. Redirect handling is left at the Go
 // default (follow up to 10); GetJSON narrows it for a request that carries a
-// credential, and the POST helpers never follow a redirect: see GetJSON.
+// credential, and the POST helpers follow one only to the same host over
+// HTTPS: see GetJSON and PostJSON.
 func Client(timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -49,8 +50,9 @@ type StatusError struct {
 	StatusCode int
 	Status     string
 	// RedirectRefused is set when the status is a redirect the helper would
-	// not follow: any redirect of a POST, or a redirect of a GET carrying a
-	// credential that leaves the host name or drops from HTTPS to plain HTTP.
+	// not follow: a redirect of a POST that leaves the host name or does not
+	// land on HTTPS, or a redirect of a GET carrying a credential that leaves
+	// the host name or drops from HTTPS to plain HTTP.
 	RedirectRefused bool
 }
 
@@ -135,10 +137,10 @@ func GetJSON(ctx context.Context, client *http.Client, rawURL string, out any, o
 // POST (a login, a GraphQL query), never for a request that changes the
 // connected system.
 //
-// PostJSON never follows a redirect, whatever the client's own policy: a 307
-// or 308 would resend the body, which often carries a credential, to whatever
-// host the redirect names. The redirect comes back as a *StatusError with
-// RedirectRefused set instead.
+// PostJSON follows a redirect only when it stays on the same host name and
+// lands on HTTPS, whatever the client's own policy: a 307 or 308 resends the
+// body, which often carries a credential, to whatever host the redirect names.
+// Any other redirect comes back as a *StatusError with RedirectRefused set.
 func PostJSON(ctx context.Context, client *http.Client, rawURL string, body, out any, opts ...Option) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -148,8 +150,7 @@ func PostJSON(ctx context.Context, client *http.Client, rawURL string, body, out
 }
 
 // PostForm is PostJSON for an application/x-www-form-urlencoded body, such as
-// an OAuth client-credentials token request. It never follows a redirect
-// either.
+// an OAuth client-credentials token request, with the same redirect rule.
 func PostForm(ctx context.Context, client *http.Client, rawURL string, form url.Values, out any, opts ...Option) error {
 	return doJSON(ctx, client, http.MethodPost, rawURL, "application/x-www-form-urlencoded", []byte(form.Encode()), out, opts)
 }
@@ -202,21 +203,28 @@ func sameHostWithoutDowngrade(req *http.Request, via []*http.Request) bool {
 	return true
 }
 
-func never(*http.Request, []*http.Request) bool { return false }
+// sameHostOverHTTPS allows a POST redirect only when it stays on the first
+// request's host name and lands on HTTPS. The body then reaches only the host
+// it was configured for, encrypted, which keeps an http:// source working
+// behind a proxy that upgrades it with a 307 or 308.
+func sameHostOverHTTPS(req *http.Request, via []*http.Request) bool {
+	return len(via) > 0 && req.URL.Scheme == "https" && strings.EqualFold(req.URL.Hostname(), via[0].URL.Hostname())
+}
 
 func doJSON(ctx context.Context, client *http.Client, method, rawURL, contentType string, body []byte, out any, opts []Option) error {
 	var o requestOptions
 	for _, fn := range opts {
 		fn(&o)
 	}
-	// A POST never follows a redirect: a 307 or 308 resends the body, which
-	// often carries a password, to wherever the redirect points. A GET with a
-	// credential header follows one only on the same host and never down to
-	// plain HTTP. Only an anonymous GET keeps the client's own policy.
+	// A POST follows a redirect only to the same host over HTTPS: a 307 or 308
+	// resends the body, which often carries a password, to wherever the
+	// redirect points. A GET with a credential header follows one only on the
+	// same host and never down to plain HTTP. Only an anonymous GET keeps the
+	// client's own policy.
 	var refused bool
 	switch {
 	case method != http.MethodGet:
-		client = guardRedirects(client, never, &refused)
+		client = guardRedirects(client, sameHostOverHTTPS, &refused)
 	case o.credential:
 		client = guardRedirects(client, sameHostWithoutDowngrade, &refused)
 	}
