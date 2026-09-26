@@ -6,6 +6,9 @@ import tailwindcss from '@tailwindcss/vite';
 // fabricated data and no backend (see src/lib/demoMode.ts), served from a
 // GitHub Pages project path. It writes to dist-demo and never touches dist or
 // the assets embedded in the Go binary. A fork can pass `-- --base /name/`.
+// The live demo's top-level pages, as linked from its navigation and posts.
+const demoPages = ['hosts', 'routes', 'ports', 'changes', 'expiry', 'copy-my-lab', 'sources', 'setup'];
+
 function liveDemo(): Plugin {
   return {
     name: 'homedex-live-demo',
@@ -25,9 +28,15 @@ function liveDemo(): Plugin {
     generateBundle(_options, bundle) {
       // GitHub Pages answers unknown paths with 404.html. Making it a copy of
       // the app lets a deep link such as /homedex/routes/7 survive a refresh.
+      // The top-level pages also get a real copy, so a shared link like
+      // /homedex/hosts answers 200 and link previews do not read it as broken.
+      // Asset URLs in the page are absolute under the base, so copies work.
       const index = bundle['index.html'];
       if (!index || index.type !== 'asset') throw new Error('live demo: index.html was not emitted');
       this.emitFile({ type: 'asset', fileName: '404.html', source: index.source });
+      for (const page of demoPages) {
+        this.emitFile({ type: 'asset', fileName: `${page}/index.html`, source: index.source });
+      }
     }
   };
 }

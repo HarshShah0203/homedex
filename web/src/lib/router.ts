@@ -8,7 +8,11 @@ const BASE = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
 function currentLocation() {
   const { pathname, search } = window.location;
-  const inside = BASE && (pathname === BASE || pathname.startsWith(`${BASE}/`)) ? pathname.slice(BASE.length) || '/' : pathname;
+  let inside = BASE && (pathname === BASE || pathname.startsWith(`${BASE}/`)) ? pathname.slice(BASE.length) || '/' : pathname;
+  // GitHub Pages serves the demo's page copies at directory addresses and
+  // redirects /homedex/ports to /homedex/ports/, so a trailing slash never
+  // changes the route.
+  if (inside.length > 1 && inside.endsWith('/')) inside = inside.replace(/\/+$/, '') || '/';
   return `${inside}${search}`;
 }
 
