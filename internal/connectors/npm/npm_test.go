@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -89,5 +90,63 @@ func TestParseExpiryLayouts(t *testing.T) {
 	}
 	if got := parseExpiry("not-a-date"); !got.IsZero() {
 		t.Errorf("parseExpiry(garbage) = %v, want zero", got)
+	}
+}
+
+func npmConfig(url string) connectors.Config {
+	return connectors.Config{"url": json.RawMessage(`"` + url + `"`), "email": json.RawMessage(`"a@b.c"`), "password": json.RawMessage(`"npm-password"`)}
+}
+
+// The token POST carries the NPM password, so a redirect must not resend it
+// anywhere, and Validate must fail exactly as Scan does instead of passing a
+// source every scan then rejects.
+func TestTokenPasswordIsNotSentThroughARedirect(t *testing.T) {
+	var landed atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		landed.Add(1)
+		_, _ = w.Write([]byte(`{"token":"t"}`))
+	}))
+	defer elsewhere.Close()
+	// Both servers listen on 127.0.0.1; naming the target localhost makes the
+	// redirect leave the configured host.
+	other := strings.Replace(elsewhere.URL, "127.0.0.1", "localhost", 1)
+	for _, code := range []int{http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, other+r.URL.Path, code)
+		}))
+		want := fmt.Sprintf("NPM token API returned %d %s; Homedex does not follow this redirect with credentials, check the URL", code, http.StatusText(code))
+		if err := New().Validate(context.Background(), npmConfig(srv.URL)); err == nil || err.Error() != want {
+			t.Errorf("%d: Validate = %v, want %q", code, err, want)
+		}
+		if _, err := New().Scan(context.Background(), npmConfig(srv.URL)); err == nil || err.Error() != want {
+			t.Errorf("%d: Scan = %v, want %q", code, err, want)
+		}
+		srv.Close()
+	}
+	if n := landed.Load(); n != 0 {
+		t.Fatalf("the redirect target received %d requests carrying the NPM password", n)
+	}
+}
+
+func TestTokenRejectsAFailedOrMalformedAnswer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		write func(http.ResponseWriter)
+		want  string
+	}{
+		"401":       {func(w http.ResponseWriter) { w.WriteHeader(http.StatusUnauthorized) }, "NPM token API returned 401 Unauthorized"},
+		"malformed": {func(w http.ResponseWriter) { _, _ = w.Write([]byte(`{"token":`)) }, ""},
+		"html":      {func(w http.ResponseWriter) { _, _ = w.Write([]byte(`<html>login</html>`)) }, ""},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/api/tokens" || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("%s: request %s %s %q", name, r.Method, r.URL.Path, r.Header.Get("Content-Type"))
+			}
+			tc.write(w)
+		}))
+		err := New().Validate(context.Background(), npmConfig(srv.URL))
+		if err == nil || (tc.want != "" && err.Error() != tc.want) {
+			t.Errorf("%s: Validate = %v, want %q", name, err, tc.want)
+		}
+		srv.Close()
 	}
 }

@@ -65,8 +65,8 @@ func TestScanRecordedMultiHostRouter(t *testing.T) {
 }
 
 // A Traefik API protected by basic auth or a header credential must never
-// hand that credential to wherever a redirect points; an unprotected one still
-// follows redirects as before.
+// hand that credential to another host a redirect points at; an unprotected
+// one still follows redirects as before.
 func TestCredentialIsNotSentThroughARedirect(t *testing.T) {
 	var mu sync.Mutex
 	var landed []string
@@ -83,8 +83,11 @@ func TestCredentialIsNotSentThroughARedirect(t *testing.T) {
 		_, _ = w.Write([]byte(`{"Version":"3.3"}`))
 	}))
 	defer elsewhere.Close()
+	// Both servers listen on 127.0.0.1; naming the target localhost makes the
+	// redirect leave the configured host.
+	other := strings.Replace(elsewhere.URL, "127.0.0.1", "localhost", 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusFound)
+		http.Redirect(w, r, other+r.URL.Path, http.StatusFound)
 	}))
 	defer srv.Close()
 	for name, extra := range map[string]string{
@@ -96,7 +99,7 @@ func TestCredentialIsNotSentThroughARedirect(t *testing.T) {
 			t.Fatal(err)
 		}
 		err := New().Validate(context.Background(), cfg)
-		if err == nil || err.Error() != "Traefik API returned 302 Found; Homedex does not follow a redirect with credentials, check the URL" {
+		if err == nil || err.Error() != "Traefik API returned 302 Found; Homedex does not follow this redirect with credentials, check the URL" {
 			t.Errorf("%s: Validate = %v, want the redirect refused", name, err)
 		}
 	}
@@ -108,5 +111,42 @@ func TestCredentialIsNotSentThroughARedirect(t *testing.T) {
 	}
 	if got := arrivals(); len(got) != 1 || got[0] != "header=false basic=false" {
 		t.Fatalf("the unauthenticated redirect landed as %v", got)
+	}
+}
+
+// The usual setup: the API sits behind basic auth or a header middleware and
+// the entrypoint redirects http:// to https:// on the same host. A source
+// configured with the http:// URL kept working before redirects were guarded
+// and must keep working now.
+func TestCredentialFollowsASameHostUpgradeToHTTPS(t *testing.T) {
+	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, basic := r.BasicAuth()
+		if !(basic && user == "homedex" && pass == "traefik-password") && r.Header.Get("X-Api-Key") != "traefik-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"Version":"3.3"}`))
+	}))
+	defer api.Close()
+	for _, code := range []int{http.StatusMovedPermanently, http.StatusPermanentRedirect} {
+		entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, api.URL+r.URL.Path, code)
+		}))
+		for name, extra := range map[string]string{
+			"header":     `,"header":"X-Api-Key","header_value":"traefik-key"`,
+			"basic auth": `,"username":"homedex","password":"traefik-password"`,
+		} {
+			cfg := connectors.Config{}
+			if err := json.Unmarshal([]byte(`{"url":"`+entry.URL+`"`+extra+`}`), &cfg); err != nil {
+				t.Fatal(err)
+			}
+			c := New()
+			c.Client = api.Client()
+			c.Client.Timeout = connectors.DefaultTimeout
+			if err := c.Validate(context.Background(), cfg); err != nil {
+				t.Errorf("%s %d: Validate = %v, want the https upgrade followed", name, code, err)
+			}
+		}
+		entry.Close()
 	}
 }

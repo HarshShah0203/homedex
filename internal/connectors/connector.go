@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,8 +31,8 @@ const MaxResponseBytes = 8 << 20
 
 // Client returns an *http.Client with an explicit timeout. A non-positive
 // timeout falls back to DefaultTimeout. Redirect handling is left at the Go
-// default (follow up to 10), which GetJSON uses only for a request that
-// carries no credential: see GetJSON.
+// default (follow up to 10); GetJSON narrows it for a request that carries a
+// credential, and the POST helpers never follow a redirect: see GetJSON.
 func Client(timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -48,7 +49,8 @@ type StatusError struct {
 	StatusCode int
 	Status     string
 	// RedirectRefused is set when the status is a redirect the helper would
-	// not follow because the request carried a credential or a POST body.
+	// not follow: any redirect of a POST, or a redirect of a GET carrying a
+	// credential that leaves the host name or drops from HTTPS to plain HTTP.
 	RedirectRefused bool
 }
 
@@ -58,7 +60,7 @@ func (e *StatusError) Error() string {
 		msg = e.Label + " " + msg
 	}
 	if e.RedirectRefused {
-		msg += "; Homedex does not follow a redirect with credentials, check the URL"
+		msg += "; Homedex does not follow this redirect with credentials, check the URL"
 	}
 	return msg
 }
@@ -81,7 +83,7 @@ func WithLabel(label string) Option {
 }
 
 // WithBasicAuth adds HTTP basic authentication to the request, which then
-// never follows a redirect.
+// follows a redirect only as GetJSON describes.
 func WithBasicAuth(username, password string) Option {
 	return func(o *requestOptions) {
 		o.credential = true
@@ -92,7 +94,7 @@ func WithBasicAuth(username, password string) Option {
 // WithHeader sets a single request header. It is applied after the request's
 // own headers, so it can also replace the Content-Type PostJSON sets. The
 // header is treated as a credential, such as an X-API-Key, so the request
-// never follows a redirect.
+// follows a redirect only as GetJSON describes.
 func WithHeader(key, value string) Option {
 	return func(o *requestOptions) {
 		o.credential = true
@@ -100,8 +102,8 @@ func WithHeader(key, value string) Option {
 	}
 }
 
-// WithBearerToken sets an Authorization: Bearer header, so the request never
-// follows a redirect.
+// WithBearerToken sets an Authorization: Bearer header, so the request
+// follows a redirect only as GetJSON describes.
 func WithBearerToken(token string) Option {
 	return WithHeader("Authorization", "Bearer "+token)
 }
@@ -113,12 +115,15 @@ func WithBearerToken(token string) Option {
 // to use a client with an explicit timeout (see Client). A non-2xx response
 // yields a *StatusError carrying the status code and the caller's label.
 //
-// GetJSON follows redirects as the client does only when no WithBasicAuth,
-// WithBearerToken or WithHeader option is given. With any of them it never
-// follows one, whatever the client's own policy: Go resends a custom header
-// such as X-API-Key to any host a redirect names, and Authorization to the same
-// host over plain HTTP. The redirect comes back as a *StatusError with
-// RedirectRefused set instead.
+// With no WithBasicAuth, WithBearerToken or WithHeader option, GetJSON follows
+// redirects as the client does. With any of them it follows a redirect only
+// when the target keeps the original request's host name (the port may change)
+// and the chain has not gone from HTTPS to plain HTTP, and then only if the
+// client's own policy also allows it. Go resends a custom header such as
+// X-API-Key to any host a redirect names, and Authorization to the same host
+// over plain HTTP, so any other redirect comes back as a *StatusError with
+// RedirectRefused set instead. A same-host upgrade from http:// to https://
+// still works, as it did before.
 func GetJSON(ctx context.Context, client *http.Client, rawURL string, out any, opts ...Option) error {
 	return doJSON(ctx, client, http.MethodGet, rawURL, "", nil, out, opts)
 }
@@ -149,34 +154,71 @@ func PostForm(ctx context.Context, client *http.Client, rawURL string, form url.
 	return doJSON(ctx, client, http.MethodPost, rawURL, "application/x-www-form-urlencoded", []byte(form.Encode()), out, opts)
 }
 
-// withoutRedirects returns a copy of client that hands a redirect back to the
-// caller instead of following it. The copy shares the transport, so it keeps
-// the client's timeout, TLS settings and connection pool.
-func withoutRedirects(client *http.Client) *http.Client {
+// maxRedirects matches the limit of Go's default redirect policy, which a
+// custom CheckRedirect replaces.
+const maxRedirects = 10
+
+// guardRedirects returns a copy of client whose redirect policy first asks
+// allow, and hands a redirect it rejects back to the caller as the response,
+// setting *refused. A redirect allow accepts still goes through the client's
+// own policy, or Go's default limit when it has none. The copy shares the
+// transport, so it keeps the client's timeout, TLS settings and connection
+// pool, and the caller's client is left unchanged.
+func guardRedirects(client *http.Client, allow func(req *http.Request, via []*http.Request) bool, refused *bool) *http.Client {
 	c := *client
-	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	next := client.CheckRedirect
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !allow(req, via) {
+			*refused = true
+			return http.ErrUseLastResponse
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		return nil
+	}
 	return &c
 }
 
-// isRedirect reports the statuses Go's client follows.
-func isRedirect(code int) bool {
-	switch code {
-	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+// sameHostWithoutDowngrade allows a redirect whose target keeps the first
+// request's host name and whose chain never moves from HTTPS to plain HTTP.
+// Along such a chain a credential reaches only the host it was configured for,
+// and never travels in the clear after it has been sent encrypted.
+func sameHostWithoutDowngrade(req *http.Request, via []*http.Request) bool {
+	if len(via) == 0 || !strings.EqualFold(req.URL.Hostname(), via[0].URL.Hostname()) {
+		return false
+	}
+	if req.URL.Scheme == "https" {
 		return true
 	}
-	return false
+	for _, prev := range via {
+		if prev.URL.Scheme == "https" {
+			return false
+		}
+	}
+	return true
 }
+
+func never(*http.Request, []*http.Request) bool { return false }
 
 func doJSON(ctx context.Context, client *http.Client, method, rawURL, contentType string, body []byte, out any, opts []Option) error {
 	var o requestOptions
 	for _, fn := range opts {
 		fn(&o)
 	}
-	// Only an anonymous GET may follow a redirect: a POST body or a
-	// credential header would be resent to wherever the redirect points.
-	refuseRedirects := method != http.MethodGet || o.credential
-	if refuseRedirects {
-		client = withoutRedirects(client)
+	// A POST never follows a redirect: a 307 or 308 resends the body, which
+	// often carries a password, to wherever the redirect points. A GET with a
+	// credential header follows one only on the same host and never down to
+	// plain HTTP. Only an anonymous GET keeps the client's own policy.
+	var refused bool
+	switch {
+	case method != http.MethodGet:
+		client = guardRedirects(client, never, &refused)
+	case o.credential:
+		client = guardRedirects(client, sameHostWithoutDowngrade, &refused)
 	}
 	var reader io.Reader
 	if body != nil {
@@ -198,8 +240,7 @@ func doJSON(ctx context.Context, client *http.Client, method, rawURL, contentTyp
 	}
 	defer res.Body.Close()
 	if res.StatusCode/100 != 2 {
-		return &StatusError{Label: o.label, StatusCode: res.StatusCode, Status: res.Status,
-			RedirectRefused: refuseRedirects && isRedirect(res.StatusCode)}
+		return &StatusError{Label: o.label, StatusCode: res.StatusCode, Status: res.Status, RedirectRefused: refused}
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, MaxResponseBytes)).Decode(out)
 }

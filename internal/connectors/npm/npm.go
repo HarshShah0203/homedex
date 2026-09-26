@@ -1,9 +1,7 @@
 package npm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/HarshShah0203/homedex/internal/connectors"
@@ -68,21 +66,13 @@ func (c *Connector) token(ctx context.Context, x config) (string, error) {
 	if cached != "" {
 		return cached, nil
 	}
-	b, _ := json.Marshal(map[string]string{"identity": x.Email, "secret": x.Password})
-	req, _ := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(x.URL, "/")+"/api/tokens", bytes.NewReader(b))
-	req.Header.Set("Content-Type", "application/json")
-	res, e := c.Client.Do(req)
-	if e != nil {
-		return "", e
-	}
-	defer res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return "", fmt.Errorf("NPM token API returned %s", res.Status)
-	}
 	var v struct {
 		Token string `json:"token"`
 	}
-	e = json.NewDecoder(res.Body).Decode(&v)
+	// The body carries the NPM password, so PostJSON never follows a
+	// redirect with it and bounds the answer like every other request.
+	e := connectors.PostJSON(ctx, c.Client, strings.TrimRight(x.URL, "/")+"/api/tokens",
+		map[string]string{"identity": x.Email, "secret": x.Password}, &v, connectors.WithLabel("NPM token"))
 	if e == nil {
 		c.mu.Lock()
 		if c.tokens == nil {

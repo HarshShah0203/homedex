@@ -2,8 +2,10 @@ package connectors
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -161,8 +163,8 @@ var credentialOptions = map[string]Option{
 }
 
 // redirectTarget is a second server that counts every request reaching it.
-// It shares 127.0.0.1 with the redirecting server, so Go would resend even
-// Authorization to it, and a custom header such as X-API-Key goes to any host.
+// It listens on 127.0.0.1 like the redirecting server; reach it through
+// otherHost to make it a different host.
 func redirectTarget(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var landed atomic.Int32
@@ -172,6 +174,18 @@ func redirectTarget(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	}))
 	t.Cleanup(elsewhere.Close)
 	return elsewhere, &landed
+}
+
+// otherHost names the same test server by another host name, so a redirect
+// to it leaves the host the request was sent to.
+func otherHost(t *testing.T, serverURL string) string {
+	t.Helper()
+	u, err := url.Parse(serverURL)
+	if err != nil || u.Hostname() != "127.0.0.1" {
+		t.Fatalf("test server URL %q is not on 127.0.0.1", serverURL)
+	}
+	u.Host = "localhost:" + u.Port()
+	return u.String()
 }
 
 func redirectingServer(target string, code int) *httptest.Server {
@@ -189,7 +203,7 @@ func wantRefusedRedirect(t *testing.T, name string, code int, err error) {
 		t.Errorf("%s %d: err = %#v, want a refused %d redirect", name, code, err, code)
 		return
 	}
-	if want := "Unraid API returned " + se.Status + "; Homedex does not follow a redirect with credentials, check the URL"; err.Error() != want {
+	if want := "Unraid API returned " + se.Status + "; Homedex does not follow this redirect with credentials, check the URL"; err.Error() != want {
 		t.Errorf("%s %d: message %q, want %q", name, code, err.Error(), want)
 	}
 }
@@ -197,6 +211,8 @@ func wantRefusedRedirect(t *testing.T, name string, code int, err error) {
 func TestPostHelpersNeverFollowRedirects(t *testing.T) {
 	elsewhere, landed := redirectTarget(t)
 	for _, code := range redirectCodes {
+		// Even a redirect to the same host is refused: a 307 or 308 would
+		// resend the body.
 		srv := redirectingServer(elsewhere.URL, code)
 		// The shared client follows redirects for GETs; the POST helpers must not.
 		client := Client(time.Second)
@@ -215,23 +231,137 @@ func TestPostHelpersNeverFollowRedirects(t *testing.T) {
 	}
 }
 
-func TestGetJSONWithACredentialNeverFollowsRedirects(t *testing.T) {
+func TestGetJSONWithACredentialRefusesARedirectToAnotherHost(t *testing.T) {
 	elsewhere, landed := redirectTarget(t)
+	target := otherHost(t, elsewhere.URL)
 	for _, code := range redirectCodes {
-		srv := redirectingServer(elsewhere.URL, code)
+		srv := redirectingServer(target, code)
+		// A same-host hop first must not let the chain leave the host later.
+		hop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/hop" {
+				http.Redirect(w, r, target+"/steal", code)
+				return
+			}
+			http.Redirect(w, r, "/hop", code)
+		}))
 		client := Client(time.Second)
-		for name, opt := range credentialOptions {
-			var got answer
-			err := GetJSON(context.Background(), client, srv.URL, &got, WithLabel("Unraid"), opt)
-			wantRefusedRedirect(t, "GetJSON "+name, code, err)
+		for _, start := range []string{srv.URL, hop.URL} {
+			for name, opt := range credentialOptions {
+				var got answer
+				err := GetJSON(context.Background(), client, start, &got, WithLabel("Unraid"), opt)
+				wantRefusedRedirect(t, "GetJSON "+name, code, err)
+			}
 		}
 		if client.CheckRedirect != nil {
 			t.Errorf("%d: the caller's client was changed", code)
 		}
 		srv.Close()
+		hop.Close()
 	}
 	if n := landed.Load(); n != 0 {
 		t.Fatalf("the redirect target received %d requests carrying a credential", n)
+	}
+}
+
+// credentialSeen answers with the credential the request carried, so a test
+// can tell that it arrived.
+func credentialSeen(w http.ResponseWriter, r *http.Request) {
+	seen := r.Header.Get("X-Api-Key") + r.Header.Get("Authorization")
+	if seen == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(answer{Valid: true, Name: seen})
+}
+
+var wantCredential = map[string]string{
+	"WithHeader":      "unraid-key",
+	"WithBearerToken": "Bearer tok",
+	"WithBasicAuth":   "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:app-secret")),
+}
+
+// The usual Traefik setup: the configured URL is http:// and the entrypoint
+// redirects to https:// on the same host. The credential was configured for
+// that host and now travels encrypted, so the redirect is followed as before.
+func TestGetJSONWithACredentialFollowsASameHostUpgradeToHTTPS(t *testing.T) {
+	api := httptest.NewTLSServer(http.HandlerFunc(credentialSeen))
+	defer api.Close()
+	for _, code := range redirectCodes {
+		entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, api.URL+r.URL.Path, code)
+		}))
+		client := api.Client()
+		client.Timeout = time.Second
+		for name, opt := range credentialOptions {
+			var got answer
+			err := GetJSON(context.Background(), client, entry.URL+"/api/version", &got, WithLabel("Traefik"), opt)
+			if err != nil || !got.Valid || got.Name != wantCredential[name] {
+				t.Errorf("%s %d: GetJSON = %+v, %v, want the upgrade followed with the credential", name, code, got, err)
+			}
+		}
+		entry.Close()
+	}
+}
+
+func TestGetJSONWithACredentialRefusesADowngradeToHTTP(t *testing.T) {
+	var landed atomic.Int32
+	var secureURL string
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/final" {
+			landed.Add(1)
+			_, _ = io.WriteString(w, `{"valid":true}`)
+			return
+		}
+		// The start of an http -> https -> http chain.
+		http.Redirect(w, r, secureURL+"/bounce", http.StatusFound)
+	}))
+	defer plain.Close()
+	secure := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/final", http.StatusFound)
+	}))
+	defer secure.Close()
+	secureURL = secure.URL
+	client := secure.Client()
+	client.Timeout = time.Second
+	for name, opt := range credentialOptions {
+		var got answer
+		err := GetJSON(context.Background(), client, secure.URL, &got, WithLabel("Unraid"), opt)
+		wantRefusedRedirect(t, "https to http "+name, http.StatusFound, err)
+		err = GetJSON(context.Background(), client, plain.URL+"/start", &got, WithLabel("Unraid"), opt)
+		wantRefusedRedirect(t, "http to https to http "+name, http.StatusFound, err)
+	}
+	if n := landed.Load(); n != 0 {
+		t.Fatalf("plain HTTP received %d requests carrying a credential", n)
+	}
+	var got answer
+	if err := GetJSON(context.Background(), client, secure.URL, &got); err != nil || !got.Valid || landed.Load() != 1 {
+		t.Fatalf("an anonymous GET no longer follows the redirect: %+v, %v", got, err)
+	}
+}
+
+// A same-host redirect a credentialed GET may follow still obeys the caller's
+// client (Tailscale's never follows one) and Go's limit of 10.
+func TestGetJSONWithACredentialKeepsTheClientsRedirectPolicy(t *testing.T) {
+	elsewhere, landed := redirectTarget(t)
+	srv := redirectingServer(elsewhere.URL, http.StatusFound)
+	defer srv.Close()
+	client := Client(time.Second)
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	var got answer
+	err := GetJSON(context.Background(), client, srv.URL, &got, WithLabel("Tailscale"), WithBearerToken("tok"))
+	var se *StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusFound || se.RedirectRefused || landed.Load() != 0 {
+		t.Fatalf("err = %#v, landed %d, want the client's own policy to stop the redirect", err, landed.Load())
+	}
+
+	var hops atomic.Int32
+	loop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, fmt.Sprintf("/loop/%d", hops.Add(1)), http.StatusFound)
+	}))
+	defer loop.Close()
+	err = GetJSON(context.Background(), Client(time.Second), loop.URL, &got, WithBearerToken("tok"))
+	if err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") || hops.Load() != 10 {
+		t.Fatalf("redirect loop: err = %v after %d hops, want Go's limit of 10", err, hops.Load())
 	}
 }
 
