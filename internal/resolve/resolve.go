@@ -106,8 +106,9 @@ func resolve(route *domain.Route, inv Inventory, links map[EntityRef]EntityRef) 
 	}
 	// Published host port. localhost and Docker gateway names are accepted when
 	// exactly one published mapping matches, avoiding false high-confidence links.
-	// A host is addressed by its address or any alias, and a tailnet device also
-	// stands for the machine it is linked to, whose connector reports the ports.
+	// A host is addressed by its address or any alias, and a view (a tailnet
+	// device, a DNS name) also stands for the machine it is linked to, whose
+	// connector reports the ports.
 	local := host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "host.docker.internal" || host == "gateway.docker.internal"
 	hostRefs := map[EntityRef]bool{}
 	for _, h := range inv.Hosts {
@@ -269,19 +270,35 @@ func addressedBy(h Host, host string) bool {
 	return false
 }
 
-// linkMachines pairs each tailnet device with the machine another connector
-// (Docker, SSH, manual) reports for it. An address is the strongest evidence:
-// a machine reached at one of the device's IPs or MagicDNS names. Only a
-// device with no such machine falls back to a unique short host name, since a
-// default name like raspberrypi can belong to unrelated machines. It makes no
-// guesses: two candidate machines, or two devices claiming one machine on
-// equal evidence, leave the device unlinked; a claim by address outranks a
-// claim by name.
+// isView reports whether a host kind is a second view of a machine rather than
+// a machine: a tailnet device, or the names a local DNS resolver answers for
+// one address. Views never count as machines; a linked view stands for its
+// machine, and an unlinked one for nothing.
+func isView(kind string) bool {
+	return kind == domain.HostKindTailscale || kind == domain.HostKindDNS
+}
+
+// linkMachines pairs each view host with the machine another connector
+// (Docker, SSH, manual) reports for it. It makes no guesses: a view with two
+// candidate machines stays unlinked, and so do two views of the same kind
+// claiming one machine on equal evidence. Claims are counted per view kind, so
+// one machine can have a tailnet device and a DNS view at once.
+//
+// A tailnet device is matched by address first: a machine reached at one of
+// the device's IPs or MagicDNS names. Only a device with no such machine falls
+// back to a unique short host name, since a default name like raspberrypi can
+// belong to unrelated machines, and a device's claim by address outranks
+// another device's claim by name.
+//
+// A DNS view is matched by its IP address only, never by a name: its names are
+// what the view adds, and a resolver's record says nothing about which
+// reported machine goes by that name. A loopback or unspecified record (the
+// asking client, or a block) names no machine.
 func linkMachines(hosts []Host) map[EntityRef]EntityRef {
 	byAddress := map[string][]EntityRef{}
 	byName := map[string][]EntityRef{}
 	for _, h := range hosts {
-		if h.Kind == domain.HostKindTailscale {
+		if isView(h.Kind) {
 			continue
 		}
 		if addr := canonicalHost(h.Address); addr != "" {
@@ -292,37 +309,60 @@ func linkMachines(hosts []Host) map[EntityRef]EntityRef {
 		}
 	}
 	type claim struct {
+		kind      string
 		machine   EntityRef
 		byAddress bool
 	}
-	devices := map[EntityRef]claim{}
+	views := map[EntityRef]claim{}
 	claims := map[claim]int{}
 	for _, h := range hosts {
-		if h.Kind != domain.HostKindTailscale {
+		var matches map[EntityRef]bool
+		viaAddress := true
+		switch h.Kind {
+		case domain.HostKindTailscale:
+			matches = candidateMachines(append([]string{h.Address}, h.Aliases...), byAddress, canonicalHost)
+			if len(matches) == 0 {
+				viaAddress = false
+				matches = candidateMachines(append([]string{h.Name}, h.Aliases...), byName, shortName)
+			}
+		case domain.HostKindDNS:
+			if addr, ok := recordAddress(h.Address); ok {
+				matches = candidateMachines([]string{addr}, byAddress, canonicalHost)
+			}
+		default:
 			continue
-		}
-		matches := candidateMachines(append([]string{h.Address}, h.Aliases...), byAddress, canonicalHost)
-		viaAddress := len(matches) > 0
-		if !viaAddress {
-			matches = candidateMachines(append([]string{h.Name}, h.Aliases...), byName, shortName)
 		}
 		if len(matches) != 1 {
 			continue
 		}
 		for machine := range matches {
-			c := claim{machine, viaAddress}
-			devices[h.Ref] = c
+			c := claim{h.Kind, machine, viaAddress}
+			views[h.Ref] = c
 			claims[c]++
 		}
 	}
 	links := map[EntityRef]EntityRef{}
-	for device, c := range devices {
-		if claims[c] > 1 || (!c.byAddress && claims[claim{c.machine, true}] > 0) {
+	for view, c := range views {
+		if claims[c] > 1 || (!c.byAddress && claims[claim{c.kind, c.machine, true}] > 0) {
 			continue
 		}
-		links[device] = c.machine
+		links[view] = c.machine
 	}
 	return links
+}
+
+// recordAddress is the canonical IP a DNS view answers with, or false when its
+// address is not an IP or is one that names no machine.
+func recordAddress(s string) (string, bool) {
+	a, err := netip.ParseAddr(strings.Trim(normalize(s), "[]"))
+	if err != nil {
+		return "", false
+	}
+	a = a.Unmap()
+	if a.IsLoopback() || a.IsUnspecified() {
+		return "", false
+	}
+	return a.String(), true
 }
 
 func candidateMachines(ids []string, index map[string][]EntityRef, key func(string) string) map[EntityRef]bool {
@@ -338,9 +378,9 @@ func candidateMachines(ids []string, index map[string][]EntityRef, key func(stri
 }
 
 // MachineHostIDs returns the ids of the hosts a proxy URL's host name refers
-// to, by name, address or alias. A tailnet device stands for the machine it is
-// linked to and is dropped when unlinked: scoping a proxy to a device that runs
-// no services would hide every candidate.
+// to, by name, address or alias. A view (a tailnet device, a DNS name) stands
+// for the machine it is linked to and is dropped when unlinked: scoping a proxy
+// to a view that runs no services would hide every candidate.
 func MachineHostIDs(hosts []Host, hostname string) []int64 {
 	name := normalize(hostname)
 	if name == "" {
@@ -363,7 +403,7 @@ func MachineHostIDs(hosts []Host, hostname string) []int64 {
 		if normalize(h.Name) != name && !addressedBy(h, name) {
 			continue
 		}
-		if h.Kind != domain.HostKindTailscale {
+		if !isView(h.Kind) {
 			add(h.ID)
 		} else if machine, ok := links[h.Ref]; ok {
 			add(byRef[machine])

@@ -68,7 +68,7 @@ For every active proxy route, resolution tries deterministic evidence in order:
 
 1. Docker network IP plus matching internal port → `high` confidence.
 2. Container name or network alias plus matching internal port → `high` confidence.
-3. Host address or alias plus a unique published port → `medium` confidence. A tailnet device also stands for the one machine another connector reports under the same short host name; two such machines, or two devices claiming one, leave it unlinked. A loopback upstream also matches a loopback-only listener on the proxy's own host.
+3. Host address or alias plus a unique published port → `medium` confidence. A view host also stands for the one machine another connector reports. A tailnet device (kind `tailscale`) links by one of its addresses or MagicDNS names, else by a unique short host name. A DNS view (kind `dns`: the names a local resolver such as Pi-hole answers for one IP) links only by that IP, never by a name, and never for a loopback or unspecified record. Two candidate machines, or two views of the same kind claiming one machine, leave the view unlinked; one machine can have a tailnet device and a DNS view at once. A loopback upstream also matches a loopback-only listener on the proxy's own host.
 4. No unique match → `broken`, confidence `none`.
 
 Resolution is rerun after snapshots are applied. The deterministic demo includes all three outcomes.
