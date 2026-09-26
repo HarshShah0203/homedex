@@ -19,10 +19,26 @@ type Snapshot struct {
 	ImageUpdates []ImageUpdate
 }
 
-// HostKindTailscale marks a tailnet device. It is a second view of a machine
-// another connector may already report, so route resolution links the two
-// instead of treating the device as a machine of its own.
-const HostKindTailscale = "tailscale"
+// Host kinds a connector may report besides docker, ssh, manual, vm, lxc and
+// proxmox-node. The hosts table CHECK lists every accepted kind.
+const (
+	// HostKindTailscale marks a tailnet device. It is a second view of a
+	// machine another connector may already report, so route resolution links
+	// the two instead of treating the device as a machine of its own.
+	HostKindTailscale = "tailscale"
+	// HostKindDNS marks a DNS view of one address, as a local resolver
+	// (Pi-hole, AdGuard Home) answers it: Address is the IP and Aliases are the
+	// names that resolve to it. Like a tailnet device it is a view, not a
+	// machine; route resolution links it to the one machine reported at that
+	// exact address, never by name.
+	HostKindDNS = "dns"
+	// HostKindUnraid is an Unraid server.
+	HostKindUnraid = "unraid"
+	// HostKindTrueNAS is a TrueNAS system.
+	HostKindTrueNAS = "truenas"
+	// HostKindK8sNode is a Kubernetes node.
+	HostKindK8sNode = "k8s-node"
+)
 
 type Host struct {
 	Key     string
