@@ -37,7 +37,7 @@ If `7377` is already occupied, set `HOMEDEX_PORT` when running Compose.
 
 The UI is reachable from this machine only. To open it from other machines on your LAN, start it with `HOMEDEX_BIND=0.0.0.0 docker compose up -d --build` and finish the setup wizard straight away: until an admin password exists, whoever reaches the page first sets it.
 
-Prefer automation? `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, nginx config files, SSH hosts, Tailscale, TLS, RDAP, and remote Docker sources — all of which can also be added in the UI under **Sources**.
+Prefer automation? `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, nginx config files, SSH hosts, Tailscale, TLS, RDAP, image update checks, and remote Docker sources. All of them can also be added in the UI under **Sources**.
 
 ### Why the socket proxy matters
 
@@ -67,6 +67,7 @@ It seeds the real SQLite schema and API with 3 hosts, 12 services, 16 port alloc
 | Tailscale | Read-only device list from the Tailscale API (OAuth client with `devices:core:read`, or an API access token): hostnames, tailnet IPs, MagicDNS names, OS, and last seen; routes to tailnet names resolve to the service on the same machine |
 | Route resolution | Joins upstreams to container network IPs, names/aliases, or host-published ports; unresolved routes are marked broken |
 | Expiry data | Probes explicit TLS targets and queries explicit registrable domains through RDAP connectors |
+| Image updates | Opt-in daily check of the tags running containers use against their registries (Docker Hub, ghcr.io, lscr.io, quay.io, others via their token challenge) with anonymous, read-only manifest `HEAD` requests: badges and filters containers whose tag now points at a newer build, reports pinned and unknown images honestly, and files one change-feed entry per newly published digest |
 | Inventory | Services, hosts, ports, routes, certificates, domains, connector status, scan history, and changes in SQLite |
 | Search | FTS-backed API search plus the UI command palette |
 | Scanning | Scan-on-create/update, manual scan API, and enabled-connector schedules (15 minutes by default) |
@@ -96,7 +97,7 @@ These tools can be complementary. Homedex is not a topology visualizer, monitor,
 - The container runs as distroless non-root with a read-only root filesystem; only `/data` is writable. Its minimal OpenSSH client supports `ssh://` Docker endpoints when a dedicated key and verified `known_hosts` directory are mounted read-only.
 - Compose drops Linux capabilities, sets `no-new-privileges`, isolates the socket proxy, and binds the UI to `127.0.0.1`.
 - There is no built-in TLS termination. Use a trusted reverse proxy and set `HOMEDEX_SECURE_COOKIES=true` for HTTPS deployments.
-- There is no telemetry or update checker. Outbound connections occur only for configured connectors, TLS targets, and RDAP lookups.
+- There is no telemetry and Homedex never checks for its own updates. Outbound connections occur only for configured connectors, TLS targets, RDAP lookups, and, when an image update source is added, anonymous manifest lookups at the registries your containers' images come from.
 - The image target is **under 30 MiB**, with a **40 MiB hard CI limit**.
 
 Read [SECURITY.md](SECURITY.md), [backup and data handling](docs/BACKUP_AND_DATA.md), and [deployment security](docs/SECURITY_DEPLOYMENT.md) before exposing the UI beyond localhost.

@@ -25,7 +25,7 @@ environment:
   ALLOW_RESTARTS: 0
 ```
 
-`POST=0` is the important API control. Section variables restrict which GET/HEAD paths are available. The lifecycle flags are explicitly disabled as defense-in-depth and to make the intended policy reviewable.
+`POST=0` is the important API control. Section variables restrict which GET/HEAD paths are available. `IMAGES=1` lets Homedex list images for the registry digests they were pulled as, which image update checks compare; without it the inventory still works and update status reads unknown. The lifecycle flags are explicitly disabled as defense-in-depth and to make the intended policy reviewable.
 
 ## A read-only socket bind is not enough
 
