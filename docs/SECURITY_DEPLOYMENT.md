@@ -56,13 +56,16 @@ Allow Homedex egress only to endpoints it needs:
 - configured TLS targets;
 - IANA and registry RDAP endpoints if RDAP is enabled;
 - `api.tailscale.com` over HTTPS if the Tailscale connector is enabled;
+- the configured Proxmox VE node over HTTPS on TCP 8006 if the Proxmox connector is enabled. Homedex talks only to that one node; the node itself relays requests about guests on other cluster nodes, so no other node needs to be reachable from Homedex;
 - HTTPS to the registries your containers' images come from, and the token services they name, if an image update source is added. For Docker Hub that is `registry-1.docker.io` and `auth.docker.io`; for ghcr.io and lscr.io, `ghcr.io` and `lscr.io`; for quay.io, `quay.io`. The requests are anonymous manifest lookups (no layers are downloaded), and a registry you do not allow simply reads as unknown. Docker Hub is contacted only when a container uses it, and testing the source passes as long as one of your containers' registries answers.
 
 The nginx connector needs no egress at all, only a read-only mount of the nginx configuration.
 
-Do not expose Docker TCP 2375, Caddy 2019, Traefik's unauthenticated dashboard/API, or NPM's admin API to the public internet for Homedex. Use internal networks, firewall allowlists, private overlays, or mTLS as supported by the upstream.
+Do not expose Docker TCP 2375, Caddy 2019, Traefik's unauthenticated dashboard/API, NPM's admin API, or the Proxmox VE API on 8006 to the public internet for Homedex. Use internal networks, firewall allowlists, private overlays, or mTLS as supported by the upstream.
 
 For Docker-over-SSH, mount the dedicated key and verified `known_hosts` file read-only at `/home/nonroot/.ssh`; never disable host-key verification. The corresponding remote account can reach the Docker daemon and is therefore privileged even though Homedex itself issues only inventory calls. See [the connector guide](CONNECTORS.md#docker-over-ssh-in-the-stock-image).
+
+For Proxmox VE, give Homedex a privilege-separated API token of a dedicated user holding only PVEAuditor, or the tighter custom roles in [the connector guide](CONNECTORS.md#proxmox-ve), never a `root@pam` token or one without privilege separation. Never grant `VM.Monitor` on PVE 8: it also allows running commands, reading and writing files and changing passwords inside every guest. Pin the node's certificate fingerprint or the cluster CA rather than trusting whatever certificate answers.
 
 ## Files and backups
 

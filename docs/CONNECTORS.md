@@ -129,6 +129,96 @@ Troubleshooting:
 - **404** — the tailnet name is wrong; use `-`.
 - **"that is an OAuth client secret"** or **"that is an auth key"** — the value was pasted into the wrong field; auth keys (`tskey-auth-…`) add devices and cannot read the API.
 
+## Proxmox VE
+
+Reads a Proxmox VE cluster, or a single node, through its REST API with an API token. Proxmox VE 9 is the target; PVE 8 works with the limits below.
+
+Each node becomes a host of kind `proxmox-node`, each QEMU VM a host of kind `vm` and each LXC container a host of kind `lxc`:
+
+- Guests are keyed by VMID (`qemu:<vmid>`, `lxc:<vmid>`) and nodes by name (`node:<name>`), never by a guest name or IP, so renaming a guest or migrating it to another node is one "modified" change on the same host.
+- Each guest is shown on the node it runs on, and every host carries the power state Proxmox reports, verbatim: `running`, `stopped`, `paused` and so on for guests, `online`, `offline` or `unknown` for nodes. A stopped guest stays in the inventory; it goes gone only when it is deleted.
+- A running VM's addresses come from its QEMU guest agent and a running container's from Proxmox's container interface list. The first IPv4 address, by interface name, is the host's address and the others are aliases; IPv6 is used only when a guest has no IPv4, because temporary IPv6 addresses rotate daily. Loopback, link-local, Docker and bridge interfaces (`docker*`, `br-*`, `veth*`, CNI, Kubernetes) and overlays that other sources own (`tailscale*`, `wg*`, `zt*`) are ignored. A stopped guest has no addresses.
+- A node's address comes from the cluster status.
+- Templates are skipped.
+
+**Routes to guests.** A proxy upstream written as a guest's IP resolves to the service publishing that port on the same machine as seen by a Docker or SSH source. Like a tailnet device, a guest or node is a second view of a machine: it is linked to the Docker, SSH or manual host at one of its addresses, or failing that to the one such host with the same short name, and never counts as a machine of its own. Point a Docker or SSH source at the guest to see what runs inside it.
+
+Config keys:
+
+- `url`: the address of any node, such as `https://pve.lab.example:8006` (port 8006 is the default). The node you name relays requests about guests on other nodes, so one URL covers the cluster; if that node is down, the scan fails until it is back.
+- `token_id`: the token ID, `user@realm!tokenname`.
+- `token_secret`: the token secret, shown once when the token is created.
+- `fingerprint`: the node certificate's SHA-256 fingerprint, to pin it. Optional; see below.
+- `ca_pem`: a CA certificate in PEM form, such as the cluster CA. Optional; set this or `fingerprint`, not both.
+
+```json
+{
+  "url": "https://pve.lab.example:8006",
+  "token_id": "homedex@pve!inventory",
+  "token_secret": "replace-with-the-token-secret"
+}
+```
+
+### A read-only token
+
+Create a dedicated user and a privilege-separated token, and give both the built-in PVEAuditor role. Run on any node:
+
+```sh
+pveum user add homedex@pve --comment "Homedex read-only inventory"
+pveum user token add homedex@pve inventory --privsep 1
+pveum acl modify / --users homedex@pve --roles PVEAuditor
+pveum acl modify / --tokens 'homedex@pve!inventory' --roles PVEAuditor
+```
+
+The user needs no password: a token works without one. A privilege-separated token gets only the privileges both it and its user hold, which is why both ACLs are needed. A token missing either one sees no guests, and Homedex refuses it with a message saying so instead of reporting an empty cluster. Never use a `root@pam` token or one created with `--privsep 0`.
+
+On **PVE 9**, PVEAuditor includes `VM.GuestAgent.Audit`, which the guest agent's address read needs. It also lets the token read more than Homedex asks for: full guest configs (descriptions, SSH keys, cloud-init settings and, since 9.1, container environment variables) and, through `Sys.Audit`, the QEMU monitor's `info` commands. Homedex never requests any of them. To grant only what it uses:
+
+```sh
+pveum role add HomedexGuests --privs "VM.Audit,VM.GuestAgent.Audit"
+pveum role add HomedexSys --privs "Sys.Audit"
+pveum acl modify / --users homedex@pve --roles HomedexGuests
+pveum acl modify / --tokens 'homedex@pve!inventory' --roles HomedexGuests
+pveum acl modify / --users homedex@pve --roles HomedexSys --propagate 0
+pveum acl modify / --tokens 'homedex@pve!inventory' --roles HomedexSys --propagate 0
+```
+
+`Sys.Audit` on `/` alone (`--propagate 0`) is enough for node addresses and keeps the monitor out of reach. Scope `HomedexGuests` to `/vms` or `/pool/<pool>` instead of `/` to inventory only those guests. Without `Sys.Audit` nodes are still listed, without addresses.
+
+On **PVE 8**, `VM.GuestAgent.Audit` does not exist and `pveum role add` fails on it; use PVEAuditor, or a custom role with `--privs "VM.Audit,Sys.Audit"`. There, every guest agent command needs `VM.Monitor`, which also allows running commands, reading and writing files and setting passwords inside every guest. **Never grant it.** Homedex sees that the token has no agent privilege and does not ask VMs for their addresses, so VMs are listed without them. Container addresses need pve-container 5.0.6 (PVE 8.1) or later, and for containers on a node other than the one in `url`, 5.2.0 or later.
+
+### Certificate trust
+
+Proxmox serves a self-signed certificate by default. Leave the fingerprint empty and press **Test connection**: the test fails and shows the SHA-256 fingerprint the node presented. Compare it with the one on the node's **System → Certificates** page (`pve-ssl.pem`), or with `openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256` run on the node, and paste it into the fingerprint field. Colons and case do not matter.
+
+A node certificate is renewed at least every two years, and a renewed certificate has a new fingerprint. To survive renewals, paste the cluster CA from `/etc/pve/pve-root-ca.pem` (valid for ten years) instead; the URL's host name must then be one the node certificate names, such as the node's name, its FQDN or its IP. A node with a certificate from a public CA, such as one issued through ACME, needs neither.
+
+There is no option to skip certificate verification. Plain `http` is accepted only for a loopback address, such as an SSH tunnel, because it would send the token in cleartext.
+
+### What is read
+
+Every request is a GET:
+
+- `/api2/json/access/permissions`, the token's own privileges, to refuse a token that cannot see guests and to skip guest agent calls when it may not make them. Only the privilege names are looked at.
+- `/api2/json/cluster/resources?type=node` and `?type=vm`, for nodes and guests: type, VMID, node, name, status and the template flag. Tags, pools, HA state, locks and usage counters are not decoded.
+- `/api2/json/cluster/status`, for node addresses.
+- For each running VM, `/nodes/<node>/qemu/<vmid>/agent/network-get-interfaces`, and for each running container, `/nodes/<node>/lxc/<vmid>/interfaces`: interface names and IP addresses only. MAC addresses and traffic counters are not decoded.
+
+Homedex never reads guest configs, pending changes or cloud-init data, opens a console, calls the QEMU monitor or any other guest agent command, and never reads storage, users, tokens, ACLs, tasks or logs. A tripwire in `scripts/check-redaction.sh` fails the build if the connector ever names one of those paths.
+
+Guest calls run four at a time, up to 10 seconds each, and all of them together stop after at most 40 seconds, so a scan stays within its 60 second limit. A running guest whose agent is not installed or not answering, or whose node cannot be reached, keeps the addresses it had instead of failing the scan; the same holds for a guest Proxmox briefly reports without a name, which keeps its stored name (a guest seen for the first time without one is listed as `VM <vmid>` or `CT <vmid>`).
+
+The token secret is sealed with the instance key like every connector secret, never returned by the API, and never included in exports or error messages. Proxmox puts its own error text in the HTTP reason phrase and the response body; Homedex never stores either and reports the status code instead. Redirects are not followed. The only egress needed is HTTPS to the node in `url`, on port 8006 unless the URL says otherwise.
+
+Troubleshooting:
+
+- **"the Proxmox certificate is not trusted"**: expected on the first test of a self-signed node. Compare and pin the fingerprint the error shows, or paste the cluster CA.
+- **"does not match the pinned fingerprint"**: the node's certificate was renewed or replaced. Compare the new fingerprint on the node and pin it again, or pin the cluster CA.
+- **401**: the token ID or secret is wrong, or the token or its user is disabled or expired.
+- **"holds no VM.Audit privilege"**: the user or the token is missing its ACL; a privilege-separated token needs both.
+- **VMs without addresses**: the QEMU guest agent is not installed in the guest or not enabled under the VM's **Options → QEMU Guest Agent**, or the cluster runs PVE 8.
+- **Nodes without addresses**: the token lacks `Sys.Audit` on `/`.
+
 ## Traefik
 
 Config keys:

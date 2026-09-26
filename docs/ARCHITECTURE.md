@@ -28,7 +28,7 @@ Docker / proxy / TLS / RDAP sources
 1. Resolves `HOMEDEX_DATA_DIR` (default `data`) and `HOMEDEX_LISTEN` (default `:7377`).
 2. Creates or loads the secretbox key.
 3. Opens SQLite and applies embedded, ordered SQL migrations.
-4. Registers Docker, Traefik, Caddy, NPM, TLS probe, and RDAP connectors.
+4. Registers the Docker, Traefik, Caddy, NPM, nginx, SSH, Tailscale, Proxmox VE, TLS probe, RDAP and image update connectors.
 5. Starts the enabled-connector scheduler.
 6. Serves health/version, setup/auth, inventory, connector, scan, search, SSE, and SPA routes.
 
@@ -44,7 +44,7 @@ The runtime has no required database server, queue, cache, cloud account, or tel
 
 The application serializes snapshot reconciliation with one process-local mutex while allowing concurrent readers. A scan run and its entity/port/change updates commit atomically.
 
-Main records include connectors, hosts, services, service network aliases, ports, routes, certificates, domains, scan runs, changes, sessions/shares, tags/custom fields, manual expiries, notification rules, and delivery deduplication. FTS5 indexes searchable host (name, address, aliases), service, route, and tag text. A host's `reported_last_seen` (the source's own last-contact time) is stored but never diffed, so a value that moves on every poll does not fill the change feed. The same holds for a service's `repo_digests` (the registry digests Docker recorded for its running image). `image_updates` holds one anonymous registry lookup per image reference; per-container update status is derived from it and `repo_digests` when the API is read, and a new remote digest that some container is behind files one `image` change. A lookup whose reference no container runs any more is retired rather than deleted, so the digest it reported is not reported again if the reference returns; retired lookups are purged with the gone-entity retention, and every lookup is deleted with the source that made it.
+Main records include connectors, hosts, services, service network aliases, ports, routes, certificates, domains, scan runs, changes, sessions/shares, tags/custom fields, manual expiries, notification rules, and delivery deduplication. FTS5 indexes searchable host (name, address, aliases), service, route, and tag text. A host's `reported_last_seen` (the source's own last-contact time) is stored but never diffed, so a value that moves on every poll does not fill the change feed. The same holds for a service's `repo_digests` (the registry digests Docker recorded for its running image). A host's `power_state` (a hypervisor guest's `running` or `stopped`, kept apart from the active or gone lifecycle) and `parent_host_id` (the node a guest runs on, from the same source) are diffed, so a guest that stops or moves files one change. A source may mark a host's name or addresses as unread for one scan, such as a guest agent that did not answer, and the stored values are then kept instead of cleared. `image_updates` holds one anonymous registry lookup per image reference; per-container update status is derived from it and `repo_digests` when the API is read, and a new remote digest that some container is behind files one `image` change. A lookup whose reference no container runs any more is retired rather than deleted, so the digest it reported is not reported again if the reference returns; retired lookups are purged with the gone-entity retention, and every lookup is deleted with the source that made it.
 
 ## Connector boundary
 
@@ -68,7 +68,7 @@ For every active proxy route, resolution tries deterministic evidence in order:
 
 1. Docker network IP plus matching internal port → `high` confidence.
 2. Container name or network alias plus matching internal port → `high` confidence.
-3. Host address or alias plus a unique published port → `medium` confidence. A tailnet device also stands for the one machine another connector reports under the same short host name; two such machines, or two devices claiming one, leave it unlinked. A loopback upstream also matches a loopback-only listener on the proxy's own host.
+3. Host address or alias plus a unique published port → `medium` confidence. A tailnet device, and a Proxmox VM, container or node, also stands for the one machine another connector reports at one of its addresses or, failing that, under the same short host name; two such machines, or two views of one kind claiming one, leave it unlinked. Such a view never scopes a proxy by itself, since it runs no services. A loopback upstream also matches a loopback-only listener on the proxy's own host.
 4. No unique match → `broken`, confidence `none`.
 
 Resolution is rerun after snapshots are applied. The deterministic demo includes all three outcomes.
