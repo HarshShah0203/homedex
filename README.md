@@ -4,7 +4,7 @@
 
 **The missing inventory for your homelab.**
 
-Point Homedex at Docker and a supported reverse proxy to build a searchable record of services, hosts, ports, routes, certificates, domains, and changes.
+Point Homedex at Docker, Proxmox, Tailscale and your reverse proxy to build a searchable record of services, hosts, ports, routes, certificates, domains, and changes, and see which containers have a newer image.
 
 **[Live demo](https://harshshah0203.github.io/homedex/)** (fabricated data, nothing to install) · [Quickstart](#quickstart) · [Write a connector](#write-a-connector)
 
@@ -17,11 +17,13 @@ Homedex is **the ledger, not the map**: it answers “what runs where?” from o
 
 New connectors ship in tagged releases. To hear about them, choose **Watch > Custom > Releases** at the top of this page.
 
-![The Homedex services ledger — every service, image, route, host, and port, discovered from Docker and your reverse proxy](docs/screenshots/services.png)
+![The Homedex services ledger: every service, image, route, host and port, with containers whose tag has a newer build badged](docs/screenshots/services.png)
 
-| Routes: domain → proxy → container, broken chains flagged | Expiry: certs and domains by days remaining |
+| Routes: domain → proxy → container, broken chains flagged | Hosts: Docker machines, Proxmox nodes, VMs and containers |
 |---|---|
-| ![Routes register](docs/screenshots/routes.png) | ![Expiry register](docs/screenshots/expiry.png) |
+| ![Routes register](docs/screenshots/routes.png) | ![Hosts register](docs/screenshots/hosts.png) |
+| **Expiry: certs and domains by days remaining** | **Changes: what moved between scans** |
+| ![Expiry register](docs/screenshots/expiry.png) | ![Change feed](docs/screenshots/changes.png) |
 
 > **Status:** the discovery engine, authenticated API, scheduled reconciliation, change feed, route resolution, TLS/RDAP connectors, exports, read-only shares, notifications, manual records/metadata, setup wizard, and embedded Svelte inventory UI are implemented and wired end to end.
 
