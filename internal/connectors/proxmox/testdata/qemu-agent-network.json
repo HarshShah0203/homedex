@@ -1,0 +1,49 @@
+{
+  "data": {
+    "result": [
+      {
+        "name": "lo",
+        "hardware-address": "00:00:00:00:00:00",
+        "ip-addresses": [
+          { "ip-address": "127.0.0.1", "ip-address-type": "ipv4", "prefix": 8 },
+          { "ip-address": "::1", "ip-address-type": "ipv6", "prefix": 128 }
+        ],
+        "statistics": { "rx-bytes": 1024, "rx-dropped": 0, "rx-errs": 0, "rx-packets": 12, "tx-bytes": 1024, "tx-dropped": 0, "tx-errs": 0, "tx-packets": 12 }
+      },
+      {
+        "name": "eth0",
+        "hardware-address": "bc:24:11:00:00:01",
+        "ip-addresses": [
+          { "ip-address": "192.0.2.21", "ip-address-type": "ipv4", "prefix": 24 },
+          { "ip-address": "2001:db8:10::21", "ip-address-type": "ipv6", "prefix": 64 },
+          { "ip-address": "fe80::be24:11ff:fe00:1%eth0", "ip-address-type": "ipv6", "prefix": 64 }
+        ],
+        "statistics": { "rx-bytes": 987654321, "rx-dropped": 0, "rx-errs": 0, "rx-packets": 123456, "tx-bytes": 123456789, "tx-dropped": 0, "tx-errs": 0, "tx-packets": 65432 }
+      },
+      {
+        "name": "eth1",
+        "hardware-address": "bc:24:11:00:00:02",
+        "ip-addresses": [
+          { "ip-address": "198.51.100.21", "ip-address-type": "ipv4", "prefix": 24 }
+        ]
+      },
+      {
+        "name": "docker0",
+        "hardware-address": "02:42:ac:11:00:01",
+        "ip-addresses": [
+          { "ip-address": "172.17.0.1", "ip-address-type": "ipv4", "prefix": 16 }
+        ]
+      },
+      {
+        "name": "tailscale0",
+        "ip-addresses": [
+          { "ip-address": "100.64.0.21", "ip-address-type": "ipv4", "prefix": 32 }
+        ]
+      },
+      {
+        "name": "veth1a2b3c",
+        "hardware-address": "ee:ee:ee:00:00:01"
+      }
+    ]
+  }
+}

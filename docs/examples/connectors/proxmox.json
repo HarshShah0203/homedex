@@ -1,0 +1,5 @@
+{
+  "url": "https://pve.lab.example:8006",
+  "token_id": "homedex@pve!inventory",
+  "token_secret": "replace-with-the-token-secret"
+}
