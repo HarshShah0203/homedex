@@ -23,6 +23,7 @@
     { kind: 'nginx', label: 'nginx (config files)', name: 'nginx', schedule: 15 },
     { kind: 'ssh', label: 'SSH host', name: 'SSH host', schedule: 15 },
     { kind: 'tailscale', label: 'Tailscale', name: 'Tailscale', schedule: 15 },
+    { kind: 'proxmox', label: 'Proxmox VE', name: 'Proxmox VE', schedule: 15 },
     { kind: 'tlsprobe', label: 'TLS probe', name: 'TLS probe', schedule: 1440 },
     { kind: 'rdap', label: 'RDAP domains', name: 'RDAP domains', schedule: 1440 },
     { kind: 'registry', label: 'Image updates (registries)', name: 'Image updates', schedule: 1440 }
@@ -62,6 +63,9 @@
   let fTsClientID = $state('');
   let fTsClientSecret = $state('');
   let fTsApiKey = $state('');
+  let fPveTokenID = $state('');
+  let fPveTokenSecret = $state('');
+  let fPveTrust = $state('');
 
   function splitLines(value: string): string[] {
     return value.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -99,6 +103,13 @@
         return fTsAuth === 'oauth'
           ? { tailnet, oauth_client_id: fTsClientID.trim(), oauth_client_secret: fTsClientSecret.trim() }
           : { tailnet, api_key: fTsApiKey.trim() };
+      }
+      case 'proxmox': {
+        // One field takes either a pinned fingerprint or the cluster CA, and
+        // only the one pasted is sent.
+        const trust = fPveTrust.trim();
+        const tls: Record<string, string> = !trust ? {} : trust.startsWith('-----BEGIN') ? { ca_pem: trust } : { fingerprint: trust };
+        return { url: fUrl.trim(), token_id: fPveTokenID.trim(), token_secret: fPveTokenSecret.trim(), ...tls };
       }
       default:
         return { endpoint: fEndpoint.trim(), host_name: fHostName.trim(), host_address: fHostAddress.trim() };
@@ -207,6 +218,9 @@
     fTsClientID = '';
     fTsClientSecret = '';
     fTsApiKey = '';
+    fPveTokenID = '';
+    fPveTokenSecret = '';
+    fPveTrust = '';
   }
 
   function armDelete(id: number) {
@@ -374,6 +388,12 @@
             {/if}
             <label class="field-label">Tailnet <input bind:value={fTsTailnet} placeholder="-" /></label>
             <small class="field-help">Create an OAuth client with only Devices → Core → Read. An API access token acts with every permission of the user who created it and expires within 90 days.</small>
+          {:else if addKind === 'proxmox'}
+            <label class="field-label">Proxmox URL <input bind:value={fUrl} placeholder="https://pve.lab.internal:8006" /></label>
+            <label class="field-label">API token ID <input bind:value={fPveTokenID} placeholder="homedex@pve!inventory" autocomplete="off" /></label>
+            <label class="field-label">API token secret <input type="password" bind:value={fPveTokenSecret} autocomplete="new-password" /></label>
+            <label class="field-label">Certificate fingerprint or CA <textarea bind:value={fPveTrust} rows="2" placeholder="Test connection shows the fingerprint"></textarea></label>
+            <small class="field-help">Create a privilege-separated API token and grant the PVEAuditor role on / to both its user and the token. Proxmox signs its certificate itself: press Test connection with the certificate field empty, compare the fingerprint it shows with the node's System → Certificates page, and paste it. The cluster CA from /etc/pve/pve-root-ca.pem also works and survives certificate renewals. Homedex only lists nodes and guests and asks running guests for their IP addresses; it never reads guest configs.</small>
           {/if}
           <label class="field-label">Schedule, minutes <input type="number" min="1" bind:value={addSchedule} /></label>
           <div class="form-actions">

@@ -4,6 +4,7 @@
   import { plural, relativeTime } from '../time';
   import HostInspector from '../HostInspector.svelte';
   import { navigate } from '../router';
+  import { placement } from '../placement';
 
   let { path, inventory, onrefresh = async () => {} }: { path: string; inventory: Inventory; onrefresh?: () => Promise<void> } = $props();
   let showAdd = $state(false);
@@ -72,6 +73,7 @@
           <header><h2>{host.name}</h2><span class="status ok">Observed</span></header>
           <p class="address">{[host.address, host.os, host.arch].filter(Boolean).join(' · ')}</p>
           {#if host.aliases?.length}<p class="address mono">{host.aliases.join(' · ')}</p>{/if}
+          {#if placement(host)}<p class="placement">{placement(host)}</p>{/if}
           {#if host.reported_last_seen}<small>{host.kind === 'tailscale' ? 'Last seen on tailnet' : 'Reported last seen'} {relativeTime(host.reported_last_seen)}</small>{/if}
           <dl><div><dt>Services</dt><dd>{host.services ?? countServices(host.name)}</dd></div><div><dt>Ports</dt><dd>{host.ports ?? countPorts(host.name)}</dd></div><div><dt>Routes</dt><dd>{countRoutes(host.name)}</dd></div></dl>
           <button class="quiet-button" onclick={() => navigate(`/hosts/${host.id}`)}>{host.id === selectedID ? 'Inspector open' : 'Open connected records'}</button>

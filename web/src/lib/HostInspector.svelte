@@ -2,8 +2,9 @@
   import { X } from 'lucide-svelte';
   import { patchEntity, type Inventory } from './api';
   import type { Host } from './types';
-  import { navigate } from './router';
+  import { appHref, navigate } from './router';
   import { relativeTime } from './time';
+  import { hypervisorKind, isHypervisorView } from './placement';
 
   let { host, inventory, readOnly = false }: { host: Host; inventory: Inventory; readOnly?: boolean } = $props();
   let tab = $state<'Overview' | 'Notes' | 'History'>('Overview');
@@ -63,7 +64,11 @@
   </nav>
   <div class="inspector-body">
     {#if tab === 'Overview'}
-      <section class="inspect-section"><h3>HOST FACTS</h3><dl class="definition-list"><div><dt>Address</dt><dd class="mono">{host.address}</dd></div><div><dt>System</dt><dd>{host.os} · {host.arch}</dd></div><div><dt>Engine</dt><dd>Docker 28.1.1</dd></div><div><dt>Source</dt><dd>docker-socket-proxy</dd></div><div><dt>Last seen</dt><dd>{host.last_seen ? relativeTime(host.last_seen) : 'Recently'}</dd></div></dl></section>
+      {#if isHypervisorView(host)}
+        <section class="inspect-section"><h3>HOST FACTS</h3><dl class="definition-list"><div><dt>Address</dt><dd class="mono">{host.address || 'Not reported'}</dd></div>{#if host.aliases?.length}<div><dt>Also at</dt><dd class="mono">{host.aliases.join(', ')}</dd></div>{/if}<div><dt>Kind</dt><dd>{hypervisorKind(host)}</dd></div>{#if host.os}<div><dt>System</dt><dd>{host.os}</dd></div>{/if}{#if host.parent}<div><dt>Runs on</dt><dd>{#if host.parent_id}<a href={appHref(`/hosts/${host.parent_id}`)} onclick={(event) => { event.preventDefault(); navigate(`/hosts/${host.parent_id}`); }}>{host.parent}</a>{:else}{host.parent}{/if}</dd></div>{/if}{#if host.power_state}<div><dt>Power</dt><dd>{host.power_state}</dd></div>{/if}<div><dt>Last seen</dt><dd>{host.last_seen ? relativeTime(host.last_seen) : 'Recently'}</dd></div></dl></section>
+      {:else}
+        <section class="inspect-section"><h3>HOST FACTS</h3><dl class="definition-list"><div><dt>Address</dt><dd class="mono">{host.address}</dd></div><div><dt>System</dt><dd>{host.os} · {host.arch}</dd></div><div><dt>Engine</dt><dd>Docker 28.1.1</dd></div><div><dt>Source</dt><dd>docker-socket-proxy</dd></div><div><dt>Last seen</dt><dd>{host.last_seen ? relativeTime(host.last_seen) : 'Recently'}</dd></div></dl></section>
+      {/if}
       <section class="inspect-section"><h3>CONNECTED RECORDS · {services.length + ports.length + routes.length}</h3>
         {#each services.slice(0, 2) as service}<div class="connected-row"><b>S</b><div><strong>{service.name}</strong><small>Service · {service.stack} · {service.state}</small></div><i>›</i></div>{/each}
         {#each routes.slice(0, 1) as route}<div class="connected-row"><b>R</b><div><strong>{route.domain}</strong><small>Route · {route.proxy}</small></div><i>›</i></div>{/each}
