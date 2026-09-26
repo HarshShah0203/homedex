@@ -38,6 +38,22 @@ type Host struct {
 	// ReportedLastSeen is the source's own last-contact time. It is stored but
 	// excluded from change diffs, because it moves on every poll.
 	ReportedLastSeen *time.Time
+	// ParentKey is the natural key of the host this one runs on, reported by
+	// the same connector in the same snapshot (a guest's hypervisor node). A
+	// key the snapshot does not contain leaves the host without a parent.
+	ParentKey string
+	// PowerState is the source's own run state for a machine it can start and
+	// stop, such as a VM's "running" or "stopped", stored verbatim. It is not
+	// the inventory lifecycle (active or gone): a stopped guest is still there.
+	PowerState string
+	// NameUnread and AddressesUnread mark facts the source could not read on
+	// this scan for a reason expected to pass: a guest agent that did not
+	// answer, a node that stopped reporting its guests. The engine keeps the
+	// stored name, or address and aliases, instead of overwriting them, so a
+	// passing gap files no change. A host seen for the first time is stored as
+	// reported.
+	NameUnread      bool
+	AddressesUnread bool
 }
 
 func (h Host) NaturalKey() string { return h.Key }

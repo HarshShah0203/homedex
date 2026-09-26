@@ -248,25 +248,34 @@ func sortNetworks(n []networkRow) {
 
 func applyHosts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now string, items []domain.Host) (map[string]int64, int, error) {
 	ids := make(map[string]int64, len(items))
+	names := make(map[string]string, len(items)) // the name stored this scan, for parent diffs
 	seen := make(map[string]bool)
 	changes := 0
-	for _, h := range items {
+	for _, h := range parentsFirst(items) {
 		if h.NaturalKey() == "" || h.Name == "" {
 			return nil, 0, fmt.Errorf("host natural key and name are required")
 		}
 		seen[h.NaturalKey()] = true
 		aliases := normalizeAliases(h.Aliases)
-		aliasesJSON, _ := json.Marshal(aliases)
 		var reported any
 		if h.ReportedLastSeen != nil && !h.ReportedLastSeen.IsZero() {
 			reported = h.ReportedLastSeen.UTC().Format(time.RFC3339Nano)
 		}
+		// A parent is another host of this snapshot, already written because
+		// parentsFirst orders it earlier; any other key leaves no parent.
+		var parent sql.NullInt64
+		parentName := ""
+		if pid, ok := ids[h.ParentKey]; ok && h.ParentKey != "" {
+			parent, parentName = sql.NullInt64{Int64: pid, Valid: true}, names[h.ParentKey]
+		}
 		var id int64
-		var oldName, oldKind, oldAddress, oldOS, oldArch, oldState, oldAliases string
-		err := tx.QueryRowContext(ctx, `SELECT id,name,kind,address,os,arch,state,aliases FROM hosts WHERE connector_id=? AND natural_key=?`, connectorID, h.NaturalKey()).Scan(&id, &oldName, &oldKind, &oldAddress, &oldOS, &oldArch, &oldState, &oldAliases)
+		var oldName, oldKind, oldAddress, oldOS, oldArch, oldState, oldAliases, oldPower, oldParentName string
+		var oldParent sql.NullInt64
+		err := tx.QueryRowContext(ctx, `SELECT h.id,h.name,h.kind,h.address,h.os,h.arch,h.state,h.aliases,h.power_state,h.parent_host_id,COALESCE(p.name,'') FROM hosts h LEFT JOIN hosts p ON p.id=h.parent_host_id WHERE h.connector_id=? AND h.natural_key=?`, connectorID, h.NaturalKey()).Scan(&id, &oldName, &oldKind, &oldAddress, &oldOS, &oldArch, &oldState, &oldAliases, &oldPower, &oldParent, &oldParentName)
 		switch err {
 		case sql.ErrNoRows:
-			r, e := tx.ExecContext(ctx, `INSERT INTO hosts(connector_id,natural_key,name,kind,address,os,arch,notes,aliases,reported_last_seen,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, h.NaturalKey(), h.Name, h.Kind, h.Address, h.OS, h.Arch, h.Notes, string(aliasesJSON), reported, now, now, now, now)
+			aliasesJSON, _ := json.Marshal(aliases)
+			r, e := tx.ExecContext(ctx, `INSERT INTO hosts(connector_id,natural_key,name,kind,address,os,arch,notes,aliases,reported_last_seen,power_state,parent_host_id,state,first_seen,last_seen,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)`, connectorID, h.NaturalKey(), h.Name, h.Kind, h.Address, h.OS, h.Arch, h.Notes, string(aliasesJSON), reported, h.PowerState, parent, now, now, now, now)
 			if e != nil {
 				return nil, 0, e
 			}
@@ -275,24 +284,40 @@ func applyHosts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 				return nil, 0, e
 			}
 			changes++
+			names[h.NaturalKey()] = h.Name
 		case nil:
+			// A fact the source could not read this scan keeps its stored value,
+			// so an agent that did not answer does not clear a guest's addresses.
+			name, address := h.Name, h.Address
+			if h.NameUnread {
+				name = oldName
+			}
+			if h.AddressesUnread {
+				var stored []string
+				_ = json.Unmarshal([]byte(oldAliases), &stored)
+				address, aliases = oldAddress, normalizeAliases(stored)
+			}
+			aliasesJSON, _ := json.Marshal(aliases)
 			// reported_last_seen is deliberately not a diff key: Tailscale moves it on
 			// every poll, and a 'modified' entry per device per scan would bury real
 			// changes. Rows migrated from before aliases existed hold '[]' and other
 			// connectors send none, so both sides read "" and an upgrade files nothing.
+			// Power state and parent are empty for every connector that reports
+			// neither, so they file nothing for those either.
 			diff := fieldsDiff(
-				map[string]string{"name": oldName, "kind": oldKind, "address": oldAddress, "os": oldOS, "arch": oldArch, "state": oldState, "aliases": aliasDisplay(oldAliases)},
-				map[string]string{"name": h.Name, "kind": h.Kind, "address": h.Address, "os": h.OS, "arch": h.Arch, "state": "active", "aliases": strings.Join(aliases, ", ")},
+				map[string]string{"name": oldName, "kind": oldKind, "address": oldAddress, "os": oldOS, "arch": oldArch, "state": oldState, "aliases": aliasDisplay(oldAliases), "power": oldPower, "parent": oldParentName},
+				map[string]string{"name": name, "kind": h.Kind, "address": address, "os": h.OS, "arch": h.Arch, "state": "active", "aliases": strings.Join(aliases, ", "), "power": h.PowerState, "parent": parentName},
 			)
-			if _, err = tx.ExecContext(ctx, `UPDATE hosts SET connector_id=?,name=?,kind=?,address=?,os=?,arch=?,notes=?,aliases=?,reported_last_seen=?,state='active',last_seen=?,updated_at=? WHERE id=?`, connectorID, h.Name, h.Kind, h.Address, h.OS, h.Arch, h.Notes, string(aliasesJSON), reported, now, now, id); err != nil {
+			if _, err = tx.ExecContext(ctx, `UPDATE hosts SET connector_id=?,name=?,kind=?,address=?,os=?,arch=?,notes=?,aliases=?,reported_last_seen=?,power_state=?,parent_host_id=?,state='active',last_seen=?,updated_at=? WHERE id=?`, connectorID, name, h.Kind, address, h.OS, h.Arch, h.Notes, string(aliasesJSON), reported, h.PowerState, parent, now, now, id); err != nil {
 				return nil, 0, err
 			}
 			if len(diff) > 0 {
-				if err = addChange(ctx, tx, runID, "host", id, "modified", "Host "+h.Name+" changed", diff, now); err != nil {
+				if err = addChange(ctx, tx, runID, "host", id, "modified", "Host "+name+" changed", diff, now); err != nil {
 					return nil, 0, err
 				}
 				changes++
 			}
+			names[h.NaturalKey()] = name
 		default:
 			return nil, 0, err
 		}
@@ -300,6 +325,35 @@ func applyHosts(ctx context.Context, tx *sql.Tx, connectorID, runID int64, now s
 	}
 	n, err := markGone(ctx, tx, "hosts", connectorID, runID, seen, now)
 	return ids, changes + n, err
+}
+
+// parentsFirst orders a snapshot's hosts so each comes after the host it names
+// as its parent, keeping the snapshot's order otherwise. A parent missing from
+// the snapshot, or a cycle, cannot be satisfied and does not hold a host back.
+func parentsFirst(items []domain.Host) []domain.Host {
+	present := make(map[string]bool, len(items))
+	for _, h := range items {
+		present[h.NaturalKey()] = true
+	}
+	out := make([]domain.Host, 0, len(items))
+	placed := make(map[string]bool, len(items))
+	pending := items
+	for len(pending) > 0 {
+		var next []domain.Host
+		for _, h := range pending {
+			if h.ParentKey == "" || h.ParentKey == h.NaturalKey() || !present[h.ParentKey] || placed[h.ParentKey] {
+				out = append(out, h)
+				placed[h.NaturalKey()] = true
+			} else {
+				next = append(next, h)
+			}
+		}
+		if len(next) == len(pending) {
+			return append(out, next...)
+		}
+		pending = next
+	}
+	return out
 }
 
 // normalizeAliases trims, drops empties, dedupes and sorts so an alias list

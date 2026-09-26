@@ -100,7 +100,7 @@ func addUpdateStatus(item map[string]any, source, kind, state, image, tag, repoD
 
 func (s *Server) listHosts(w http.ResponseWriter, r *http.Request) {
 	limit, offset := listPage(r)
-	rows, err := s.store.DB().QueryContext(r.Context(), `SELECT h.id,h.name,h.kind,h.address,h.os,h.arch,h.state,h.first_seen,h.last_seen,h.natural_key,(SELECT COUNT(*) FROM services s WHERE s.host_id=h.id AND s.state!='gone'),(SELECT COUNT(*) FROM ports p WHERE p.host_id=h.id),h.aliases,h.reported_last_seen FROM hosts h ORDER BY LOWER(h.name),h.id LIMIT ? OFFSET ?`, limit, offset)
+	rows, err := s.store.DB().QueryContext(r.Context(), `SELECT h.id,h.name,h.kind,h.address,h.os,h.arch,h.state,h.first_seen,h.last_seen,h.natural_key,(SELECT COUNT(*) FROM services s WHERE s.host_id=h.id AND s.state!='gone'),(SELECT COUNT(*) FROM ports p WHERE p.host_id=h.id),h.aliases,h.reported_last_seen,h.power_state,h.parent_host_id,COALESCE(parent.name,'') FROM hosts h LEFT JOIN hosts parent ON parent.id=h.parent_host_id ORDER BY LOWER(h.name),h.id LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		http.Error(w, "database error", 500)
 		return
@@ -109,10 +109,11 @@ func (s *Server) listHosts(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id int64
-		var name, kind, address, os, arch, state, first, last, natural, aliasesJSON string
+		var name, kind, address, os, arch, state, first, last, natural, aliasesJSON, power, parentName string
 		var services, ports int
 		var reported sql.NullString
-		if err = rows.Scan(&id, &name, &kind, &address, &os, &arch, &state, &first, &last, &natural, &services, &ports, &aliasesJSON, &reported); err != nil {
+		var parentID sql.NullInt64
+		if err = rows.Scan(&id, &name, &kind, &address, &os, &arch, &state, &first, &last, &natural, &services, &ports, &aliasesJSON, &reported, &power, &parentID, &parentName); err != nil {
 			http.Error(w, "database error", 500)
 			return
 		}
@@ -120,7 +121,11 @@ func (s *Server) listHosts(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal([]byte(aliasesJSON), &aliases) != nil || aliases == nil {
 			aliases = []string{}
 		}
-		items = append(items, map[string]any{"id": id, "name": name, "kind": kind, "address": address, "os": os, "arch": arch, "state": state, "first_seen": first, "last_seen": last, "natural_key": natural, "services": services, "ports": ports, "aliases": aliases, "reported_last_seen": nullString(reported)})
+		var parent any
+		if parentID.Valid {
+			parent = parentID.Int64
+		}
+		items = append(items, map[string]any{"id": id, "name": name, "kind": kind, "address": address, "os": os, "arch": arch, "state": state, "first_seen": first, "last_seen": last, "natural_key": natural, "services": services, "ports": ports, "aliases": aliases, "reported_last_seen": nullString(reported), "power_state": power, "parent_id": parent, "parent": parentName})
 	}
 	writeList(w, r, s, "hosts", items, limit, offset)
 }
