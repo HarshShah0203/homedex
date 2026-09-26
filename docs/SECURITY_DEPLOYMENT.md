@@ -6,6 +6,7 @@ Read [SECURITY.md](../SECURITY.md) and begin with [the Docker socket proxy](DOCK
 
 The repository stack:
 
+- pulls the published `ghcr.io/harshshah0203/homedex` image (`HOMEDEX_VERSION` pins a release), so the file works without a checkout;
 - gives the raw Docker socket only to `docker-socket-proxy`;
 - denies POST and lifecycle operations at the socket proxy;
 - puts the proxy on an internal network with no host-published port;
@@ -15,7 +16,7 @@ The repository stack:
 - keeps `/data` in a dedicated writable volume;
 - binds the UI to `127.0.0.1:7377` by default (`HOMEDEX_BIND` changes the address; see below before widening it).
 
-Run `./scripts/check-compose-security.sh` after editing Compose. The check validates the rendered configuration rather than only grepping YAML.
+Run `./scripts/check-compose-security.sh` after editing Compose. The check validates the rendered configuration rather than only grepping YAML, for both the default file and the `docker-compose.build.yml` source-build override.
 
 These are defense-in-depth controls, not proof against Docker daemon, kernel, dependency, or application vulnerabilities.
 

@@ -1,0 +1,13 @@
+# Build Homedex from this checkout instead of pulling the published image.
+# Use it together with the default file, which keeps every hardening setting:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  homedex:
+    build:
+      context: .
+      target: runtime
+      args:
+        VERSION: local
+    image: homedex:local
+    pull_policy: build

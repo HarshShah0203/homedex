@@ -39,6 +39,12 @@ make smoke
 docker compose -f demo/compose.yml up --build -d
 ```
 
+The default `docker-compose.yml` pulls the published image. To run the full stack from your checkout with the same hardening, add the source-build override:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
 `make check` includes the Docker-environment ingestion tripwire and hardened Compose assertions. The CI workflow additionally uses the race detector and enforces binary/image budgets.
 
 ## Connector shape

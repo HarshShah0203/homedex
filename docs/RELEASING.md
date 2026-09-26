@@ -14,6 +14,8 @@ Archives include the binary, license, core operational docs, SHA-256 checksums, 
 
 The workflow does not publish a Docker Hub mirror. Do not document one unless a tested publishing job and credentials are added.
 
+The default `docker-compose.yml` pulls `ghcr.io/harshshah0203/homedex:${HOMEDEX_VERSION:-0.1}`, so every `0.1.x` release reaches new installs and `docker compose pull` without a file change. When a release starts a new minor line, bump that default only after the release workflow has published the image; until then, new installs from `main` would try to pull a tag that does not exist yet.
+
 ## Budgets
 
 - Binary hard limit: 40 MiB in CI.
@@ -43,6 +45,8 @@ docker build --build-arg VERSION=next -t homedex:next .
 ./scripts/check-npm-audit.sh
 docker compose -f demo/compose.yml up -d --build
 curl -fsS http://127.0.0.1:7377/api/health
+HOMEDEX_PORT=17380 docker compose -p homedex-source-check -f docker-compose.yml -f docker-compose.build.yml up -d --build
+curl -fsS http://127.0.0.1:17380/api/health
 goreleaser check
 goreleaser release --snapshot --clean
 ```
@@ -67,6 +71,13 @@ git tag -a v0.1.0 -m "Homedex v0.1.0"
 git push origin v0.1.0
 ```
 
-The GitHub Actions `Release` workflow creates the GitHub release and package. Verify archives, checksums, SBOMs, image architectures, image startup, and the release page before announcing availability.
+The GitHub Actions `Release` workflow creates the GitHub release and package. Verify archives, checksums, SBOMs, image architectures, image startup, and the release page before announcing availability. Then check the pull-only install from an empty directory. The separate project name keeps the check away from any Homedex already running on the same machine:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/HarshShah0203/homedex/main/docker-compose.yml
+HOMEDEX_PORT=17390 docker compose -p homedex-release-check up -d
+curl -fsS http://127.0.0.1:17390/api/health
+docker compose -p homedex-release-check down -v
+```
 
 GoReleaser marks semantic prerelease tags as prereleases automatically. A configured workflow is not evidence that any particular tag or package already exists.

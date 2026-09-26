@@ -1,3 +1,12 @@
+# Homedex needs only this file. It pulls the published multi-arch image, so no
+# checkout or Go/Node toolchain is required:
+#
+#   curl -fsSLO https://raw.githubusercontent.com/HarshShah0203/homedex/main/docker-compose.yml
+#   docker compose up -d
+#
+# HOMEDEX_VERSION pins a release (default: the newest 0.1.x). To build from a
+# checkout instead, add docker-compose.build.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 name: homedex
 
 services:
@@ -31,12 +40,7 @@ services:
       - discovery
 
   homedex:
-    build:
-      context: .
-      target: runtime
-      args:
-        VERSION: local
-    image: homedex:local
+    image: ghcr.io/harshshah0203/homedex:${HOMEDEX_VERSION:-0.1}
     restart: unless-stopped
     depends_on:
       - docker-socket-proxy
