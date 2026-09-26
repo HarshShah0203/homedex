@@ -77,6 +77,24 @@ describe('SharesPanel', () => {
     expect(await screen.findByText('NO SHARES')).toBeInTheDocument();
   });
 
+  it('keeps the register and reports a failed revoke beside its row', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE') return json({ error: 'share store is locked' }, 500);
+      return json({ items: [share()], total: 1 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(SharesPanel, { props: { readOnly: false } });
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Confirm revoke' }));
+
+    const notice = await screen.findByText('share store is locked');
+    expect(notice.closest('.register-row')).toHaveTextContent('Wiki link');
+    expect(screen.queryByText('SHARES UNAVAILABLE')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Revoke' })).toBeEnabled();
+  });
+
   it('renders nothing in read-only mode', async () => {
     const fetchMock = vi.fn(async () => json({ items: [share()], total: 1 }));
     vi.stubGlobal('fetch', fetchMock);

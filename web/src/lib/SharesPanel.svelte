@@ -11,6 +11,10 @@
   let loading = $state(true);
   let loadError = $state('');
   let pending = $state<Record<number, string>>({});
+  // A failed revoke is reported beside its row. Reusing loadError would swap
+  // the whole register for "SHARES UNAVAILABLE" and hide the share that is
+  // still active.
+  let notices = $state<Record<number, string>>({});
   let confirmingID = $state<number | null>(null);
   let confirmTimer = 0;
 
@@ -50,6 +54,13 @@
     pending = next;
   }
 
+  function setNotice(id: number, text: string) {
+    const next = { ...notices };
+    if (text) next[id] = text;
+    else delete next[id];
+    notices = next;
+  }
+
   async function revoke(share: Share) {
     if (confirmingID !== share.id) {
       armRevoke(share.id);
@@ -57,12 +68,13 @@
     }
     window.clearTimeout(confirmTimer);
     confirmingID = null;
+    setNotice(share.id, '');
     pending = { ...pending, [share.id]: 'Revoking' };
     try {
       await revokeShare(share.id);
       await load();
     } catch (cause) {
-      loadError = cause instanceof Error ? cause.message : 'Revoke failed.';
+      setNotice(share.id, cause instanceof Error ? cause.message : 'Revoke failed.');
     } finally {
       clearPending(share.id);
     }
@@ -140,6 +152,7 @@
             <small>created {relativeTime(share.created_at)} · {share.expires_at ? `expires ${formatDate(share.expires_at)}` : 'no expiry'}</small>
           </div>
           <div class="source-editor">
+            {#if notices[share.id]}<span class="status bad" role="status">{notices[share.id]}</span>{/if}
             {#if share.active}
               <button class={confirmingID === share.id ? 'danger-button' : 'quiet-button'} disabled={Boolean(pending[share.id])} onclick={() => revoke(share)}>{confirmingID === share.id ? 'Confirm revoke' : 'Revoke'}</button>
             {:else}

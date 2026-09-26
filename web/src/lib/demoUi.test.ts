@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import DemoBanner from './DemoBanner.svelte';
 import Pages from './Pages.svelte';
+import SharesPanel from './SharesPanel.svelte';
 import SourcesPage from './pages/SourcesPage.svelte';
 import { createDemoInventory } from './demo';
 import { DEMO_MODE, DEMO_REFUSED_EVENT } from './demoMode';
@@ -43,6 +44,20 @@ describe('live demo screens', () => {
     await fireEvent.click(screen.getAllByRole('button', { name: 'Scan now' })[0]);
 
     expect(await screen.findByText('Turned off in the live demo.')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the demo share listed when its revoke is refused', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(SharesPanel, { props: { readOnly: false } });
+    await fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Confirm revoke' }));
+
+    const notice = await screen.findByText('Turned off in the live demo.');
+    expect(notice.closest('.register-row')).toHaveTextContent('Family wiki');
+    expect(screen.queryByText('SHARES UNAVAILABLE')).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
