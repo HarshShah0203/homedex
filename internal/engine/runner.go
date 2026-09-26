@@ -225,7 +225,8 @@ func (r *Runner) ensureProxy(ctx context.Context, connectorID int64, kind, endpo
 		if err != nil {
 			return 0, err
 		}
-		// A tailnet name or IP links the proxy to the machine behind the device.
+		// A tailnet or Proxmox guest name or IP links the proxy to the machine
+		// behind that view, never to the view itself.
 		if ids := resolve.MachineHostIDs(hosts, u.Hostname()); len(ids) == 1 {
 			hostID = ids[0]
 		}

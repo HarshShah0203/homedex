@@ -42,6 +42,15 @@ type Host struct {
 
 func (h Host) NaturalKey() string { return h.Key }
 
+// Host kinds a Proxmox VE cluster reports. Each is a second view of a machine,
+// as a tailnet device is: a Docker or SSH source pointed at the same guest or
+// node reports what runs on it, and route resolution links the two.
+const (
+	HostKindProxmoxNode = "proxmox-node"
+	HostKindVM          = "vm"
+	HostKindLXC         = "lxc"
+)
+
 type Service struct {
 	Key           string
 	HostKey       string
