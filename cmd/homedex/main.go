@@ -39,6 +39,9 @@ import (
 var version = "dev"
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(runHealthcheck(os.Args[2:], os.Stderr))
+	}
 	if err := run(); err != nil {
 		slog.Error("homedex stopped", "error", err)
 		os.Exit(1)

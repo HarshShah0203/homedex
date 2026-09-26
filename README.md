@@ -126,6 +126,7 @@ These tools can be complementary. Homedex is not a topology visualizer, monitor,
 ## Deployment facts
 
 - One Go process, one HTTP port (`7377`), one SQLite database.
+- The image declares a Docker health check: `/homedex healthcheck` asks the running server for `/api/health` on the port `HOMEDEX_LISTEN` names, because the image has no shell or curl. Orchestrators and app stores can call the same command.
 - The container runs as distroless non-root with a read-only root filesystem; only `/data` is writable. Its minimal OpenSSH client supports `ssh://` Docker endpoints when a dedicated key and verified `known_hosts` directory are mounted read-only.
 - Compose drops Linux capabilities, sets `no-new-privileges`, isolates the socket proxy, and binds the UI to `127.0.0.1`.
 - There is no built-in TLS termination. Use a trusted reverse proxy and set `HOMEDEX_SECURE_COOKIES=true` for HTTPS deployments.
