@@ -14,6 +14,9 @@ type Snapshot struct {
 	Routes   []Route
 	Certs    []Cert
 	Domains  []Domain
+	// ImageUpdates are registry lookups of the image references containers
+	// run. Only the registry connector returns them.
+	ImageUpdates []ImageUpdate
 }
 
 // HostKindTailscale marks a tailnet device. It is a second view of a machine
@@ -53,6 +56,11 @@ type Service struct {
 	RestartPolicy string
 	RawLabels     map[string]string
 	Networks      []ServiceNetwork
+	// RepoDigests are the registry digests Docker recorded for the image the
+	// container runs ("nginx@sha256:..."): for a multi-arch image, the index
+	// digest its tag resolved to when pulled. Empty for a locally built image.
+	// They are stored for update checks but excluded from change diffs.
+	RepoDigests []string
 }
 
 // ServiceNetwork is addressing metadata used to resolve proxy upstreams.
@@ -123,3 +131,21 @@ type Domain struct {
 }
 
 func (d Domain) NaturalKey() string { return d.Key }
+
+// ImageUpdate is one anonymous registry lookup of an image reference, keyed
+// by the reference exactly as containers name it ("traefik/whoami:v1.10.0").
+type ImageUpdate struct {
+	Ref string
+	// Lookup is "resolved" (RemoteDigest is what the tag points at now),
+	// "pinned" (the reference names a digest, nothing to look up) or "unknown".
+	Lookup       string
+	RemoteDigest string
+	// Reason explains an unknown lookup in words safe to show the operator.
+	Reason string
+	// Transient marks an unknown lookup that may succeed later (rate limit,
+	// registry outage, timeout); the engine keeps the previous answer.
+	Transient bool
+	CheckedAt time.Time
+}
+
+func (u ImageUpdate) NaturalKey() string { return u.Ref }

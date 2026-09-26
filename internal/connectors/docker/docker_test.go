@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 	"github.com/HarshShah0203/homedex/internal/domain"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/go-connections/nat"
 )
@@ -20,7 +22,13 @@ import (
 type fakeAPI struct {
 	list        []types.Container
 	inspect     types.ContainerJSON
+	images      []imagetypes.Summary
+	imagesErr   error
 	active, max atomic.Int32
+}
+
+func (f *fakeAPI) ImageList(context.Context, imagetypes.ListOptions) ([]imagetypes.Summary, error) {
+	return f.images, f.imagesErr
 }
 
 func (f *fakeAPI) ContainerList(context.Context, container.ListOptions) ([]types.Container, error) {
@@ -174,5 +182,39 @@ func TestMapContainerIncludesHostConfigBindingsAndExposedPorts(t *testing.T) {
 	}
 	if byContainer[8080].Number != 18080 || !byContainer[8080].Published || byContainer[9000].Published {
 		t.Fatalf("ports=%#v", ports)
+	}
+}
+
+// Update checks compare the registry against the digests Docker recorded for
+// the image a container runs, so the scan carries them from the image list,
+// matched by image ID, and never from anything that includes image config.
+func TestScanRecordsRepoDigestsOfTheRunningImage(t *testing.T) {
+	const index = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	list := fixture[[]types.Container](t, "containers.json")
+	inspect := fixture[types.ContainerJSON](t, "inspect.json")
+	images := []imagetypes.Summary{
+		{ID: list[0].ImageID, RepoDigests: []string{"jellyfin/jellyfin@" + index, "jellyfin/jellyfin@" + index, " "}},
+		{ID: "sha256:unrelated", RepoDigests: []string{"alpine@" + index}},
+	}
+	api := &fakeAPI{list: list, inspect: inspect, images: images}
+	c := New()
+	c.newClient = func(Config) (API, error) { return api, nil }
+	snap, err := c.Scan(context.Background(), connectors.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Services[0].RepoDigests; len(got) != 1 || got[0] != "jellyfin/jellyfin@"+index {
+		t.Fatalf("repo digests = %v", got)
+	}
+
+	// A socket proxy with IMAGES=0 refuses the list; the inventory scan still works.
+	api = &fakeAPI{list: list, inspect: inspect, imagesErr: errors.New("403 Forbidden")}
+	c.newClient = func(Config) (API, error) { return api, nil }
+	snap, err = c.Scan(context.Background(), connectors.Config{})
+	if err != nil {
+		t.Fatalf("image list failure failed the scan: %v", err)
+	}
+	if len(snap.Services) != 1 || len(snap.Services[0].RepoDigests) != 0 {
+		t.Fatalf("services = %#v", snap.Services)
 	}
 }
