@@ -1,0 +1,33 @@
+{
+  "type": 3,
+  "title": "Homedex",
+  "name": "homedex",
+  "description": "Read-only inventory for your homelab: services, hosts, ports, routes, certificates, domains and changes, discovered from Docker, Proxmox VE, Tailscale and your reverse proxy. It never starts, stops or reconfigures anything. Source: https://github.com/HarshShah0203/homedex",
+  "categories": ["Docker", "Monitoring", "Tools"],
+  "platform": "linux",
+  "logo": "https://raw.githubusercontent.com/HarshShah0203/homedex/main/docs/brand/homedex-icon-256.png",
+  "restart_policy": "unless-stopped",
+  "repository": {
+    "url": "https://github.com/HarshShah0203/homedex",
+    "stackfile": "docker-compose.yml"
+  },
+  "env": [
+    {
+      "name": "HOMEDEX_ADMIN_PASSWORD",
+      "label": "Admin password (12 or more characters)",
+      "description": "Sets the admin password on first start, so the setup page is never open to whoever reaches it first. Only its Argon2id hash is stored; later starts ignore it."
+    },
+    {
+      "name": "HOMEDEX_BIND",
+      "label": "Address the UI listens on",
+      "description": "0.0.0.0 publishes the UI on every interface of the host. 127.0.0.1 keeps it on the host only.",
+      "default": "0.0.0.0"
+    },
+    {
+      "name": "HOMEDEX_PORT",
+      "label": "Host port for the UI",
+      "default": "7377"
+    }
+  ],
+  "note": "Set the <b>admin password</b> before you deploy: this stack publishes the UI on your LAN, and until an admin exists whoever opens the page first would choose it. Homedex stores only its Argon2id hash on first start and ignores the field afterwards; a password shorter than 12 characters stops the container with an error in its log. Then open <code>http://&lt;host&gt;:7377</code>, sign in and add your first source: the stack's read-only Docker socket proxy is prefilled as <code>tcp://docker-socket-proxy:2375</code>. Homedex only reads; the proxy rejects every Docker API write. Docs: <a href=\"https://github.com/HarshShah0203/homedex#quickstart\" target=\"_blank\">github.com/HarshShah0203/homedex</a>"
+}
