@@ -10,16 +10,17 @@ The socket proxy narrows the API surface; it does not make the Docker daemon or 
 
 ## Current security properties
 
-- Docker discovery calls only version, info, container list, and container inspect operations. There are no container lifecycle or deployment calls.
+- Docker discovery calls only version, info, container list, container inspect, and image list operations. The image list is read only for the registry digests images were pulled as. There are no container lifecycle, pull, or deployment calls.
 - Container environment variables are absent from the snapshot model and are never read. Docker labels are stored as observed metadata and can themselves contain secrets; avoid secret-bearing labels.
 - Traefik and Caddy connectors issue GET requests. Nginx Proxy Manager uses its token-authentication POST, then GETs proxy hosts and certificates; it does not edit NPM configuration.
 - The nginx connector only reads files: the entry config and files reached through `include`, confined to the mounted paths. It never opens certificates, keys or password files and makes no network connections.
 - The Tailscale connector exchanges an OAuth client for a `devices:core:read` token (or uses an API access token) and GETs the device list with default fields only. It never reads node or machine keys, owner emails or connectivity endpoints, and does not follow redirects.
+- The image update source is anonymous and read-only: it sends manifest `HEAD` requests (a `GET` only when a registry refuses `HEAD`, using headers alone) to the registries named in the containers' image references, and fetches pull-only anonymous tokens from the token service a registry's challenge names. It never requests layers or blobs, never stores or sends registry credentials, uses HTTPS only, does not send a token to any other host, and bounds requests per scan.
 - Connector configuration is authenticated-encrypted with NaCl secretbox before SQLite persistence. The key is either `/data/instance.key` (created mode `0600`) or the externally supplied `HOMEDEX_SECRET`.
 - Export sanitization masks secret-like label keys/values and supports domain/external-IP masking. Read-only shares always omit private notes, custom fields, and labels; redaction and share-scope tests block CI.
 - Admin passwords are stored as Argon2id hashes. Browser sessions use an HttpOnly, SameSite=Lax cookie; state-changing authenticated API requests require the session CSRF token. Login attempts are rate-limited.
 - The supplied runtime image is distroless and non-root. Compose uses a read-only root filesystem, drops all Linux capabilities, sets `no-new-privileges`, and leaves only `/data` writable.
-- Homedex has no telemetry or update checker. Network egress is caused only by connector endpoints, explicit TLS probe targets, and RDAP bootstrap/domain queries configured by the operator.
+- Homedex has no telemetry and never checks for its own updates. Network egress is caused only by connector endpoints, explicit TLS probe targets, RDAP bootstrap/domain queries, and, when the operator adds an image update source, registry manifest and token requests for the images their containers run.
 
 ## Operator responsibilities and limitations
 

@@ -1,12 +1,17 @@
 <script lang="ts">
   import type { Inventory } from '../api';
+  import type { Service } from '../types';
   import PageHead from '../PageHead.svelte';
   import { appHref, navigate } from '../router';
   import { plural, relativeTime } from '../time';
 
   let { inventory }: { inventory: Inventory } = $props();
   let query = $state('');
-  let visible = $derived(inventory.services.filter((service) => `${service.name} ${service.stack} ${service.image} ${service.host} ${service.route}`.toLowerCase().includes(query.toLowerCase())));
+  let updatesOnly = $state(false);
+  let updatable = $derived(inventory.services.filter((service) => service.update_status === 'update_available').length);
+  // The filter appears once a registry source has checked any image.
+  let updatesChecked = $derived(inventory.services.some((service) => Boolean(service.update_status)));
+  let visible = $derived(inventory.services.filter((service) => (!updatesOnly || service.update_status === 'update_available') && `${service.name} ${service.stack} ${service.image} ${service.host} ${service.route}`.toLowerCase().includes(query.toLowerCase())));
   let recordTotal = $derived(inventory.services.length);
   let unresolvedRoutes = $derived(inventory.routes.filter((route) => !['ok', 'resolved'].includes(route.status.toLowerCase())));
   let firstUnresolved = $derived(unresolvedRoutes[0]);
@@ -30,6 +35,29 @@
     const slash = image.lastIndexOf('/');
     const colon = image.indexOf(':', slash + 1);
     return colon > 0 ? [image.slice(0, colon), image.slice(colon)] : [image, ''];
+  }
+
+  function shortDigest(digest?: string): string {
+    const [algorithm, hex] = (digest ?? '').split(':');
+    return hex ? `${algorithm}:${hex.slice(0, 12)}` : digest ?? '';
+  }
+
+  function imageTitle(service: Service): string {
+    const ref = `${service.image}${service.tag ? `${service.tag.includes(':') ? '@' : ':'}${service.tag}` : ''}`;
+    const checked = service.update_checked_at ? `, checked ${relativeTime(service.update_checked_at)}` : '';
+    const note = service.update_reason ? `\n${service.update_reason}` : '';
+    switch (service.update_status) {
+      case 'update_available':
+        return `${ref}\nUpdate available${checked}: running ${shortDigest(service.running_digest)}, published ${shortDigest(service.latest_digest)}${note}`;
+      case 'up_to_date':
+        return `${ref}\nUp to date${checked}${note}`;
+      case 'pinned':
+        return `${ref}\nPinned by digest`;
+      case 'unknown':
+        return `${ref}\nUpdate status unknown${checked}${service.update_reason ? `: ${service.update_reason}` : ''}`;
+      default:
+        return ref;
+    }
   }
 
   function portParts(ports: string): { shown: string; more: number } {
@@ -56,6 +84,7 @@
   </nav>
   <div class="toolbar" data-component-id="service-register-controls">
     <input class="inline-search" bind:value={query} aria-label="Filter services" placeholder={`Filter ${recordTotal} services`} />
+    {#if updatesChecked || updatesOnly}<button class="filter-button" class:active={updatesOnly} aria-pressed={updatesOnly} onclick={() => (updatesOnly = !updatesOnly)}><span>Update available</span><b>{updatable}</b></button>{/if}
     <span class="spacer"></span><span class="toolbar-meta">{visible.length} VISIBLE · {recordTotal} TOTAL</span>
   </div>
   <section class="table-shell" data-component-id="virtualized-service-register">
@@ -67,7 +96,7 @@
           {@const ports = portParts(service.ports)}
           <article class="service-row" data-component-id={`service-row-${service.name}`}>
             <div class="service-name" data-label="Service"><i class={`dot ${stateClass(service.state)}`} title={observedLabel(service.state)}></i><strong>{service.name}</strong><small>{service.stack} · SRV-{String(service.id).padStart(3, '0')}</small></div>
-            <div class="cell mono" data-label="Image" title={`${service.image}:${service.tag}`}>{image[0]}<span class="dim">{image[1]}</span></div>
+            <div class="cell mono image-cell" data-label="Image" title={imageTitle(service)}><span class="image-ref">{image[0]}<span class="dim">{image[1]}</span></span>{#if service.update_status === 'update_available'}<span class="update-badge">update</span>{/if}</div>
             <div class="cell" data-label="Route" title={`${service.host}:${service.ports.split(' ')[0]}`}>{#if service.route && service.route !== '—'}<span class="route-link">{service.route}</span>{:else}<span class="dim">—</span>{/if}</div>
             <div class="cell" data-label="Host">{service.host}</div>
             <div class="cell mono num" data-label="Ports" title={service.ports}>{ports.shown}{#if ports.more}<span class="port-more">+{ports.more}</span>{/if}</div>
@@ -77,7 +106,7 @@
       </div>
       <footer class="table-footer"><span>{visible.length} of {recordTotal} records</span><span>{unresolvedRoutes.length} unresolved {unresolvedRoutes.length === 1 ? 'route' : 'routes'}</span></footer>
     {:else}
-      <div class="empty-register"><strong>{inventory.services.length ? 'NO MATCHING RECORDS' : 'NO SERVICES INDEXED'}</strong><span>{inventory.services.length ? `No service contains “${query}”.` : inventory.readOnly ? 'This shared inventory contains no service records.' : 'Add a read-only source, then run the first scan.'}</span>{#if !inventory.services.length && !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/setup')}>Add a source</button>{/if}</div>
+      <div class="empty-register"><strong>{inventory.services.length ? 'NO MATCHING RECORDS' : 'NO SERVICES INDEXED'}</strong><span>{inventory.services.length ? (updatesOnly && !query ? 'No checked image has a newer build published.' : `No ${updatesOnly ? 'service with an update' : 'service'} contains “${query}”.`) : inventory.readOnly ? 'This shared inventory contains no service records.' : 'Add a read-only source, then run the first scan.'}</span>{#if !inventory.services.length && !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/setup')}>Add a source</button>{/if}</div>
     {/if}
   </section>
 </main>

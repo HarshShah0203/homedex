@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/HarshShah0203/homedex/internal/auth"
+	"github.com/HarshShah0203/homedex/internal/domain"
+	"github.com/HarshShah0203/homedex/internal/engine"
+	"github.com/HarshShah0203/homedex/internal/imageref"
 	"github.com/HarshShah0203/homedex/internal/store"
 )
 
@@ -363,5 +366,59 @@ func TestFailedDeliveryRetriesButSuccessfulDeliveryDeduplicates(t *testing.T) {
 	}
 	if sender.calls != 2 {
 		t.Fatalf("sender calls=%d, want one failure and one successful retry", sender.calls)
+	}
+}
+
+// An available image update reaches existing change rules like any other
+// change, once per newly published digest, and a rule can scope to it alone.
+func TestChangeRulesAlertOnceOnAnAvailableImageUpdate(t *testing.T) {
+	const (
+		running   = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+		published = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	)
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	fake := &fakeSender{}
+	m := testManager(t, ctx, st, fake)
+	if _, err = m.Create(ctx, RuleInput{Name: "Everything", Kind: "change", Channels: []string{"generic://all"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Create(ctx, RuleInput{Name: "Image updates", Kind: "change", Channels: []string{"generic://images"}, Filters: map[string]any{"entity_types": []any{"image"}}}); err != nil {
+		t.Fatal(err)
+	}
+	docker, _ := st.CreateConnector(ctx, "docker", "Docker", nil)
+	registry, _ := st.CreateConnector(ctx, "registry", "Image updates", nil)
+	applier := engine.New(st, nil)
+	if _, _, err = applier.Apply(ctx, docker, domain.Snapshot{
+		Hosts:    []domain.Host{{Key: "docker:nas", Name: "nas", Kind: "docker"}},
+		Services: []domain.Service{{Key: "docker:nas:whoami", HostKey: "docker:nas", Name: "whoami", Kind: "container", Image: "traefik/whoami", Tag: "v1.10.0", State: "running", RepoDigests: []string{"traefik/whoami@" + running}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lookup := domain.Snapshot{ImageUpdates: []domain.ImageUpdate{{Ref: "traefik/whoami:v1.10.0", Lookup: imageref.LookupResolved, RemoteDigest: published}}}
+	for scan := 0; scan < 2; scan++ {
+		run, _, err := applier.Apply(ctx, registry, lookup)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = m.Evaluate(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var toImages []string
+	for _, message := range fake.messages {
+		if strings.HasPrefix(message, "generic://images ") {
+			toImages = append(toImages, message)
+		}
+	}
+	if len(toImages) != 1 || !strings.Contains(toImages[0], "Homedex change: Update available for traefik/whoami:v1.10.0") {
+		t.Fatalf("image rule messages = %#v (all: %#v)", toImages, fake.messages)
+	}
+	if len(fake.messages) != 2 {
+		t.Fatalf("messages = %#v, want the update once per rule", fake.messages)
 	}
 }

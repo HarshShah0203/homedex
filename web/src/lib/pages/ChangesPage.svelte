@@ -55,6 +55,7 @@
   }
 
   function kindLabel(change: Change): string {
+    if (change.entity_type === 'image' && change.change_kind === 'modified') return 'image update';
     const entity = change.entity_type === 'cert' ? 'cert' : change.entity_type || 'record';
     if (change.change_kind === 'added') return `+ ${entity}`;
     if (change.change_kind === 'removed') return `− ${entity}`;

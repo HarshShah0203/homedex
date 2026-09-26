@@ -75,7 +75,9 @@ kind, name, config_path, output_path = sys.argv[1:]
 with open(config_path, encoding="utf-8") as handle:
     config = json.load(handle)
 with open(output_path, "w", encoding="utf-8") as handle:
-    json.dump({"kind": kind, "name": name, "config": config, "enabled": True, "schedule_minutes": 15}, handle)
+    # Registry update checks run daily; everything else every 15 minutes.
+    schedule = 1440 if kind == "registry" else 15
+    json.dump({"kind": kind, "name": name, "config": config, "enabled": True, "schedule_minutes": schedule}, handle)
 PY
 
 set -- -sS -o "$work/result.json" -w '%{http_code}' -H 'Content-Type: application/json'

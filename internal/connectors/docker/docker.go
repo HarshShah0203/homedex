@@ -16,6 +16,7 @@ import (
 	"github.com/docker/cli/cli/connhelper"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 )
@@ -33,6 +34,7 @@ type Config struct {
 type API interface {
 	ContainerList(context.Context, container.ListOptions) ([]types.Container, error)
 	ContainerInspect(context.Context, string) (types.ContainerJSON, error)
+	ImageList(context.Context, imagetypes.ListOptions) ([]imagetypes.Summary, error)
 	Info(context.Context) (system.Info, error)
 	ServerVersion(context.Context) (types.Version, error)
 	Close() error
@@ -116,6 +118,7 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 	if err != nil {
 		return domain.Snapshot{}, fmt.Errorf("list containers: %w", err)
 	}
+	repoDigests := imageRepoDigests(ctx, cli)
 	hostName := cfg.HostName
 	if hostName == "" {
 		hostName = info.Name
@@ -158,11 +161,48 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 			return domain.Snapshot{}, fmt.Errorf("inspect container %s: %w", items[i].ID, r.err)
 		}
 		svc, ports := mapContainer(hostKey, items[i], r.inspect)
+		svc.RepoDigests = repoDigests[items[i].ImageID]
 		snap.Services = append(snap.Services, svc)
 		snap.Ports = append(snap.Ports, ports...)
 	}
 	sort.Slice(snap.Services, func(i, j int) bool { return snap.Services[i].Key < snap.Services[j].Key })
 	return snap, nil
+}
+
+// composeBuildLabel is set by `docker compose build` on the images it builds.
+const composeBuildLabel = "com.docker.compose.project"
+
+// imageRepoDigests maps image IDs to the registry digests Docker recorded when
+// each image was pulled, from one image list call (GET /images/json, which
+// carries no image configuration and so no baked-in environment). Update checks
+// compare these against the registry. A daemon or socket proxy that refuses
+// the call (IMAGES=0) only costs that comparison, never the inventory scan, so
+// the error is dropped and the digests stay empty (reported as unknown).
+//
+// Docker's containerd image store (the default in Docker Desktop and new
+// Engine installs) also records a repo digest for a locally built image: its
+// own build digest. Compared with the registry, a local build of a published
+// name would read as an available update. Images Compose built carry its
+// project label, so they are treated as built locally and record none.
+func imageRepoDigests(ctx context.Context, cli API) map[string][]string {
+	images, err := cli.ImageList(ctx, imagetypes.ListOptions{})
+	if err != nil {
+		return nil
+	}
+	out := make(map[string][]string, len(images))
+	for _, img := range images {
+		if img.ID == "" || len(img.RepoDigests) == 0 || img.Labels[composeBuildLabel] != "" {
+			continue
+		}
+		digests := make([]string, 0, len(img.RepoDigests))
+		for _, d := range img.RepoDigests {
+			if d = strings.TrimSpace(d); d != "" && strings.Contains(d, "@") {
+				digests = append(digests, d)
+			}
+		}
+		out[img.ID] = dedupe(digests)
+	}
+	return out
 }
 
 func mapContainer(hostKey string, summary types.Container, in types.ContainerJSON) (domain.Service, []domain.Port) {

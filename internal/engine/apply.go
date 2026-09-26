@@ -69,6 +69,9 @@ func (a *Applier) PurgeGone(ctx context.Context, retention time.Duration) error 
 			return err
 		}
 	}
+	if err = purgeRetiredImageUpdates(ctx, tx, cutoff); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -134,7 +137,12 @@ func (a *Applier) Apply(ctx context.Context, connectorID int64, snapshot domain.
 		return 0, 0, err
 	}
 	changeCount += n
-	stats, _ := json.Marshal(map[string]int{"changes": changeCount, "hosts": len(snapshot.Hosts), "services": len(snapshot.Services), "ports": len(snapshot.Ports), "routes": len(snapshot.Routes), "certs": len(snapshot.Certs), "domains": len(snapshot.Domains)})
+	n, err = applyImageUpdates(ctx, tx, connectorID, runID, now, snapshot.ImageUpdates)
+	if err != nil {
+		return 0, 0, err
+	}
+	changeCount += n
+	stats, _ := json.Marshal(map[string]int{"changes": changeCount, "hosts": len(snapshot.Hosts), "services": len(snapshot.Services), "ports": len(snapshot.Ports), "routes": len(snapshot.Routes), "certs": len(snapshot.Certs), "domains": len(snapshot.Domains), "images": len(snapshot.ImageUpdates)})
 	if _, err = tx.ExecContext(ctx, `UPDATE scan_runs SET finished_at=?,status='success',stats=? WHERE id=?`, now, stats, runID); err != nil {
 		return 0, 0, err
 	}
@@ -332,6 +340,11 @@ func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, no
 		}
 		seen[s.NaturalKey()] = true
 		labels, _ := json.Marshal(s.RawLabels)
+		// Stored for update checks, never diffed: repo digests move with the
+		// image digest a recreate already reports, and filling the column for
+		// the first time after an upgrade must not file a change per container.
+		repoDigestsJSON, _ := json.Marshal(normalizeAliases(s.RepoDigests))
+		repoDigests := string(repoDigestsJSON)
 		var hostID any
 		if id, ok := hosts[s.HostKey]; ok {
 			hostID = id
@@ -363,7 +376,7 @@ func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, no
 			rows.Close()
 			if recreated {
 				newState := defaultString(s.State, "unknown")
-				if _, err = tx.ExecContext(ctx, `UPDATE services SET natural_key=?,host_id=?,kind=?,image=?,tag=?,digest=?,state=?,health=?,last_seen=?,restart_policy=?,raw_labels=?,updated_at=? WHERE id=?`, s.NaturalKey(), hostID, defaultString(s.Kind, "container"), s.Image, s.Tag, s.Digest, newState, s.Health, now, s.RestartPolicy, string(labels), now, id); err != nil {
+				if _, err = tx.ExecContext(ctx, `UPDATE services SET natural_key=?,host_id=?,kind=?,image=?,tag=?,digest=?,state=?,health=?,last_seen=?,restart_policy=?,raw_labels=?,repo_digests=?,updated_at=? WHERE id=?`, s.NaturalKey(), hostID, defaultString(s.Kind, "container"), s.Image, s.Tag, s.Digest, newState, s.Health, now, s.RestartPolicy, string(labels), repoDigests, now, id); err != nil {
 					return nil, 0, err
 				}
 				// A connector that changes its key scheme re-keys everything it owns on
@@ -385,7 +398,7 @@ func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, no
 				ids[s.NaturalKey()] = id
 				continue
 			}
-			r, e := tx.ExecContext(ctx, `INSERT INTO services(connector_id,host_id,name,kind,stack,image,tag,digest,state,health,first_seen,last_seen,restart_policy,raw_labels,natural_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, connectorID, hostID, s.Name, defaultString(s.Kind, "container"), s.Stack, s.Image, s.Tag, s.Digest, defaultString(s.State, "unknown"), s.Health, now, now, s.RestartPolicy, string(labels), s.NaturalKey(), now, now)
+			r, e := tx.ExecContext(ctx, `INSERT INTO services(connector_id,host_id,name,kind,stack,image,tag,digest,state,health,first_seen,last_seen,restart_policy,raw_labels,repo_digests,natural_key,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, connectorID, hostID, s.Name, defaultString(s.Kind, "container"), s.Stack, s.Image, s.Tag, s.Digest, defaultString(s.State, "unknown"), s.Health, now, now, s.RestartPolicy, string(labels), repoDigests, s.NaturalKey(), now, now)
 			if e != nil {
 				return nil, 0, e
 			}
@@ -397,7 +410,7 @@ func applyServices(ctx context.Context, tx *sql.Tx, connectorID, runID int64, no
 		} else if err == nil {
 			newState := defaultString(s.State, "unknown")
 			diff := fieldsDiff(map[string]string{"name": oldName, "stack": oldStack, "image": oldImage, "tag": oldTag, "digest": oldDigest, "state": oldState}, map[string]string{"name": s.Name, "stack": s.Stack, "image": s.Image, "tag": s.Tag, "digest": s.Digest, "state": newState})
-			if _, err = tx.ExecContext(ctx, `UPDATE services SET connector_id=?,host_id=?,name=?,kind=?,stack=?,image=?,tag=?,digest=?,state=?,health=?,last_seen=?,restart_policy=?,raw_labels=?,updated_at=? WHERE id=?`, connectorID, hostID, s.Name, defaultString(s.Kind, "container"), s.Stack, s.Image, s.Tag, s.Digest, newState, s.Health, now, s.RestartPolicy, string(labels), now, id); err != nil {
+			if _, err = tx.ExecContext(ctx, `UPDATE services SET connector_id=?,host_id=?,name=?,kind=?,stack=?,image=?,tag=?,digest=?,state=?,health=?,last_seen=?,restart_policy=?,raw_labels=?,repo_digests=?,updated_at=? WHERE id=?`, connectorID, hostID, s.Name, defaultString(s.Kind, "container"), s.Stack, s.Image, s.Tag, s.Digest, newState, s.Health, now, s.RestartPolicy, string(labels), repoDigests, now, id); err != nil {
 				return nil, 0, err
 			}
 			if len(diff) > 0 {
