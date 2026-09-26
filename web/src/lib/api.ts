@@ -1,4 +1,4 @@
-import { createDemoInventory, createDemoNotificationRules, createDemoShares } from './demo';
+import { createDemoInventory, createDemoNotificationRules, createDemoShares, withDemoUpdates } from './demo';
 import { demoContextMarkdown, demoExportFile, demoNextFreePort, demoPortConflicts } from './demoApi';
 import { DEMO_MODE, refuseInDemo } from './demoMode';
 import type { Change, Connector, ConnectorInput, ConnectorMutation, ConnectorTest, ContextCounts, ContextExport, Expiry, Host, Inventory, InventoryIssue, InventoryIssueKind, InventoryResource, NotificationRule, NotificationRuleInput, NotificationTest, Port, Route, ScanRun, Service, Share, PortConflict, ManualEntityInput } from './types';
@@ -37,7 +37,7 @@ async function list<T>(path: string): Promise<T[]> {
 }
 
 export async function loadInventory(options: { demoOnEmpty?: boolean } = {}): Promise<Inventory> {
-  if (DEMO_MODE) return createDemoInventory();
+  if (DEMO_MODE) return withDemoUpdates(createDemoInventory());
   const requests = [
     list<Service>('services'), list<Host>('hosts'), list<Port>('ports'), list<Route>('routes'), list<Change>('changes'),
     list<Expiry>('expiry'), list<Connector>('connectors')

@@ -113,6 +113,39 @@ export function createDemoInventory(error?: string, now: Date = new Date()): Inv
   };
 }
 
+// The hosted live demo also shows image update checks as a scanned lab would:
+// two services whose tag now points at a newer build, every other running
+// container checked and current. The dev-server fallback keeps the plain
+// inventory, which is why this is applied separately.
+const demoUpdates: Record<string, { running: string; latest: string }> = {
+  jellyfin: {
+    running: 'sha256:3f9c2e71a0b84d5e96c1f7a2b8d40e6c5a19f3b7e2d84c0a6b1e9f5d7c3a2b18',
+    latest: 'sha256:8b41d07e5c2a93f6d1e0b7c4a5f28d9e6c3b10a7f4e2d95c8b1a6e3f0d7c4b29'
+  },
+  'immich-server': {
+    running: 'sha256:c27e5b90d4a1f63e8b2c7d05a9f14e6b3d8c2a71f0e5b94d6c3a8e1f7b2d0c46',
+    latest: 'sha256:1d6a8f3c0e5b72d9a4c1f8e6b3d20a7c5e9f14b8d2a6c3e0f7b5d19a8c4e2f63'
+  }
+};
+
+export function withDemoUpdates(inventory: Inventory, now: Date = new Date()): Inventory {
+  const checked = isoFrom(now, -3 * 3_600_000);
+  return {
+    ...inventory,
+    services: inventory.services.map((service) => {
+      if (service.state === 'gone') return service;
+      const update = demoUpdates[service.name];
+      return update
+        ? { ...service, update_status: 'update_available', update_checked_at: checked, running_digest: update.running, latest_digest: update.latest }
+        : { ...service, update_status: 'up_to_date', update_checked_at: checked };
+    }),
+    connectors: [
+      ...inventory.connectors,
+      { id: 4, kind: 'registry', name: 'Image updates', enabled: true, schedule_minutes: 1440, last_status: 'connected', last_error: '', created_at: isoFrom(now, -30 * DAY_MS), updated_at: checked, endpoint: 'Anonymous registry manifest checks', found: '2 updates · 10 images' }
+    ]
+  };
+}
+
 export function createDemoNotificationRules(): NotificationRule[] {
   return [
     { id: 1, name: 'Expiry 14d', kind: 'expiry', threshold_days: 14, filters: {}, channels: ['ntfy'], channel_count: 1, enabled: true, created_at: '', updated_at: '' },
