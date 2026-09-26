@@ -129,6 +129,54 @@ describe('SourcesPage add source', () => {
     expect(body.config).toEqual({ tailnet: '-', api_key: 'api-token' });
   });
 
+  it('asks for a Proxmox URL, token ID, masked token secret and certificate trust', async () => {
+    const inventory = createDemoInventory();
+    inventory.source = 'api';
+    render(SourcesPage, { props: { inventory } });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'proxmox' } });
+    expect(screen.getByLabelText('Source name')).toHaveValue('Proxmox VE');
+    expect(screen.getByLabelText('Proxmox URL')).toHaveAttribute('placeholder', 'https://pve.lab.internal:8006');
+    expect(screen.getByLabelText('API token ID')).toHaveAttribute('placeholder', 'homedex@pve!inventory');
+    expect(screen.getByLabelText('API token secret')).toHaveAttribute('type', 'password');
+    expect(screen.getByLabelText('Certificate fingerprint or CA').tagName).toBe('TEXTAREA');
+    expect(screen.getByText(/PVEAuditor role on \/ to both its user and the token/)).toBeInTheDocument();
+    expect(screen.getByText(/it never reads guest configs/)).toBeInTheDocument();
+  });
+
+  it('posts a pasted Proxmox fingerprint as a pin', async () => {
+    const fingerprint = Array.from({ length: 32 }, (_, i) => i.toString(16).padStart(2, '0').toUpperCase()).join(':');
+    const body = await createBody('proxmox', async () => {
+      await fireEvent.input(screen.getByLabelText('Proxmox URL'), { target: { value: ' https://pve.lab.example:8006 ' } });
+      await fireEvent.input(screen.getByLabelText('API token ID'), { target: { value: ' homedex@pve!inventory ' } });
+      await fireEvent.input(screen.getByLabelText('API token secret'), { target: { value: ' 5f0b3c1e-9a4d-4e7b-8c21-0d6f3a9b7e42 ' } });
+      await fireEvent.input(screen.getByLabelText('Certificate fingerprint or CA'), { target: { value: ` ${fingerprint}\n` } });
+    });
+    expect(body.kind).toBe('proxmox');
+    expect(body.schedule_minutes).toBe(15);
+    expect(body.config).toEqual({ url: 'https://pve.lab.example:8006', token_id: 'homedex@pve!inventory', token_secret: '5f0b3c1e-9a4d-4e7b-8c21-0d6f3a9b7e42', fingerprint });
+  });
+
+  it('posts a pasted Proxmox CA as a CA, and neither when the field is empty', async () => {
+    const ca = '-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUX\n-----END CERTIFICATE-----';
+    const withCA = await createBody('proxmox', async () => {
+      await fireEvent.input(screen.getByLabelText('Proxmox URL'), { target: { value: 'https://pve.lab.example:8006' } });
+      await fireEvent.input(screen.getByLabelText('API token ID'), { target: { value: 'homedex@pve!inventory' } });
+      await fireEvent.input(screen.getByLabelText('API token secret'), { target: { value: 'secret' } });
+      await fireEvent.input(screen.getByLabelText('Certificate fingerprint or CA'), { target: { value: `${ca}\n` } });
+    });
+    expect(withCA.config).toEqual({ url: 'https://pve.lab.example:8006', token_id: 'homedex@pve!inventory', token_secret: 'secret', ca_pem: ca });
+    cleanup();
+
+    const bare = await createBody('proxmox', async () => {
+      await fireEvent.input(screen.getByLabelText('Proxmox URL'), { target: { value: 'https://pve.lab.example:8006' } });
+      await fireEvent.input(screen.getByLabelText('API token ID'), { target: { value: 'homedex@pve!inventory' } });
+      await fireEvent.input(screen.getByLabelText('API token secret'), { target: { value: 'secret' } });
+    });
+    expect(bare.config).toEqual({ url: 'https://pve.lab.example:8006', token_id: 'homedex@pve!inventory', token_secret: 'secret' });
+  });
+
   it('posts image update checks with skipped prefixes on a daily schedule', async () => {
     const body = await createBody('registry', async () => {
       expect(screen.getByLabelText('Skip images, one per line').tagName).toBe('TEXTAREA');

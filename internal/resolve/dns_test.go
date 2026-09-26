@@ -163,6 +163,32 @@ func TestTailnetDeviceAndDNSViewShareAMachine(t *testing.T) {
 	}
 }
 
+// A Proxmox guest is often also a tailnet device and a local DNS name: three
+// views of three families, each linked to the one machine Docker reports.
+func TestProxmoxGuestTailnetDeviceAndDNSViewShareAMachine(t *testing.T) {
+	guest := ref(6, "proxmox:qemu/101")
+	inv := tailnetInventory(
+		dnsView(dnsNAS, 5, "10.0.0.2", "nas.lan"),
+		Host{ID: 6, Ref: guest, Kind: "vm", Name: "nas-vm", Address: "10.0.0.2"},
+	)
+	links := linkMachines(inv.Hosts)
+	for view, name := range map[EntityRef]string{deviceNAS: "tailnet device", dnsNAS: "DNS view", guest: "Proxmox guest"} {
+		if links[view] != dockerNAS {
+			t.Errorf("%s linked to %v, want %v (links = %v)", name, links[view], dockerNAS, links)
+		}
+	}
+	// A second guest at the same address is a second claim of the same family:
+	// neither guest is linked, while the tailnet device and DNS view still are.
+	inv.Hosts = append(inv.Hosts, Host{ID: 7, Ref: ref(6, "proxmox:qemu/102"), Kind: "vm", Name: "clone", Address: "10.0.0.2"})
+	links = linkMachines(inv.Hosts)
+	if _, ok := links[guest]; ok {
+		t.Errorf("two guests claiming one machine: first guest still linked, links = %v", links)
+	}
+	if links[deviceNAS] != dockerNAS || links[dnsNAS] != dockerNAS {
+		t.Errorf("other families lost their link: %v", links)
+	}
+}
+
 func TestMachineHostIDsFollowsDNSViews(t *testing.T) {
 	hosts := dnsInventory(
 		dnsView(ref(5, "pihole:192.0.2.77"), 6, "192.0.2.77", "printer.home.arpa"),

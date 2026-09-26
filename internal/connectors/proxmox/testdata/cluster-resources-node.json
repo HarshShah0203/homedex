@@ -1,0 +1,46 @@
+{
+  "data": [
+    {
+      "id": "node/pve1",
+      "type": "node",
+      "node": "pve1",
+      "status": "online",
+      "level": "",
+      "cgroup-mode": 2,
+      "cpu": 0.0412,
+      "maxcpu": 16,
+      "mem": 21474836480,
+      "maxmem": 68719476736,
+      "disk": 12884901888,
+      "maxdisk": 100861726720,
+      "uptime": 1209600
+    },
+    {
+      "id": "node/pve2",
+      "type": "node",
+      "node": "pve2",
+      "status": "online",
+      "level": "",
+      "cgroup-mode": 2,
+      "cpu": 0.0107,
+      "maxcpu": 8,
+      "mem": 8589934592,
+      "maxmem": 34359738368,
+      "disk": 10737418240,
+      "maxdisk": 100861726720,
+      "uptime": 604800
+    },
+    {
+      "id": "node/pve3",
+      "type": "node",
+      "node": "pve3",
+      "status": "offline"
+    },
+    {
+      "id": "node/pve4",
+      "type": "node",
+      "node": "pve4",
+      "status": "unknown"
+    }
+  ]
+}

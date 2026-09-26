@@ -331,7 +331,7 @@ func (m *EntityManager) Detail(ctx context.Context, entityType string, id int64)
 func detailQuery(typ string) ([]string, string) {
 	switch typ {
 	case "host":
-		return []string{"id", "name", "kind", "address", "os", "arch", "notes", "state", "first_seen", "last_seen", "natural_key", "service_count", "port_count"}, `SELECT h.id,h.name,h.kind,h.address,h.os,h.arch,h.notes,h.state,h.first_seen,h.last_seen,h.natural_key,(SELECT COUNT(*) FROM services s WHERE s.host_id=h.id),(SELECT COUNT(*) FROM ports p WHERE p.host_id=h.id) FROM hosts h WHERE h.id=?`
+		return []string{"id", "name", "kind", "address", "os", "arch", "notes", "state", "first_seen", "last_seen", "natural_key", "service_count", "port_count", "power_state", "parent_id", "parent_name"}, `SELECT h.id,h.name,h.kind,h.address,h.os,h.arch,h.notes,h.state,h.first_seen,h.last_seen,h.natural_key,(SELECT COUNT(*) FROM services s WHERE s.host_id=h.id),(SELECT COUNT(*) FROM ports p WHERE p.host_id=h.id),h.power_state,h.parent_host_id,COALESCE(parent.name,'') FROM hosts h LEFT JOIN hosts parent ON parent.id=h.parent_host_id WHERE h.id=?`
 	case "service":
 		return []string{"id", "host_id", "host_name", "name", "kind", "stack", "image", "tag", "digest", "state", "health", "restart_policy", "raw_labels", "notes", "first_seen", "last_seen", "natural_key"}, `SELECT s.id,s.host_id,COALESCE(h.name,''),s.name,s.kind,s.stack,s.image,s.tag,s.digest,s.state,s.health,s.restart_policy,s.raw_labels,s.notes,s.first_seen,s.last_seen,s.natural_key FROM services s LEFT JOIN hosts h ON h.id=s.host_id WHERE s.id=?`
 	case "port":

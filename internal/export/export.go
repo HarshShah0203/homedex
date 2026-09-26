@@ -55,15 +55,18 @@ type Metadata struct {
 }
 
 type Host struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind"`
-	Address   string `json:"address,omitempty"`
-	OS        string `json:"os,omitempty"`
-	Arch      string `json:"arch,omitempty"`
-	State     string `json:"state"`
-	FirstSeen string `json:"first_seen"`
-	LastSeen  string `json:"last_seen"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Address    string `json:"address,omitempty"`
+	OS         string `json:"os,omitempty"`
+	Arch       string `json:"arch,omitempty"`
+	PowerState string `json:"power_state,omitempty"`
+	ParentID   *int64 `json:"parent_id,omitempty"`
+	Parent     string `json:"parent,omitempty"`
+	State      string `json:"state"`
+	FirstSeen  string `json:"first_seen"`
+	LastSeen   string `json:"last_seen"`
 	Metadata
 }
 
@@ -145,14 +148,14 @@ func (l *Loader) Load(ctx context.Context, options Options) (Archive, error) {
 	if err != nil {
 		return archive, err
 	}
-	rows, err := l.db.QueryContext(ctx, `SELECT id,name,kind,address,os,arch,notes,state,first_seen,last_seen FROM hosts ORDER BY LOWER(name),id`)
+	rows, err := l.db.QueryContext(ctx, `SELECT h.id,h.name,h.kind,h.address,h.os,h.arch,h.notes,h.state,h.first_seen,h.last_seen,h.power_state,h.parent_host_id,COALESCE(parent.name,'') FROM hosts h LEFT JOIN hosts parent ON parent.id=h.parent_host_id ORDER BY LOWER(h.name),h.id`)
 	if err != nil {
 		return archive, err
 	}
 	for rows.Next() {
 		var item Host
 		var baseNotes string
-		if err = rows.Scan(&item.ID, &item.Name, &item.Kind, &item.Address, &item.OS, &item.Arch, &baseNotes, &item.State, &item.FirstSeen, &item.LastSeen); err != nil {
+		if err = rows.Scan(&item.ID, &item.Name, &item.Kind, &item.Address, &item.OS, &item.Arch, &baseNotes, &item.State, &item.FirstSeen, &item.LastSeen, &item.PowerState, &item.ParentID, &item.Parent); err != nil {
 			rows.Close()
 			return archive, err
 		}
