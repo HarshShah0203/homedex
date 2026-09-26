@@ -2,7 +2,7 @@
   import { createConnector, deleteConnector, scanConnector, testConnector, testSavedConnector, updateConnector, type Inventory } from '../api';
   import type { ConnectorConfig, ConnectorInput } from '../types';
   import PageHead from '../PageHead.svelte';
-  import { navigate } from '../router';
+  import { appHref, navigate } from '../router';
   import { relativeTime } from '../time';
 
   let { inventory, onrefresh = async () => {} }: { inventory: Inventory; onrefresh?: () => Promise<void> } = $props();
@@ -373,7 +373,7 @@
             <button type="button" class="quiet-button" disabled={addBusy} onclick={cancelAdd}>Cancel</button>
             {#if addStatus}<span class={`status ${addStatus.tone}`} role="status">{addStatus.text}</span>{/if}
           </div>
-          {#if addKind === 'docker'}<small class="field-help"><a href="/setup" onclick={(event) => { event.preventDefault(); navigate('/setup'); }}>Or use the guided setup</a></small>{/if}
+          {#if addKind === 'docker'}<small class="field-help"><a href={appHref('/setup')} onclick={(event) => { event.preventDefault(); navigate('/setup'); }}>Or use the guided setup</a></small>{/if}
         </form>
       {/if}
       <section class="register" data-component-id="source-register">

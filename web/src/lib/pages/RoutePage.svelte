@@ -2,7 +2,7 @@
   import type { Inventory, Route } from '../types';
   import { copyText } from '../clipboard';
   import PageHead from '../PageHead.svelte';
-  import { navigate } from '../router';
+  import { appHref, navigate } from '../router';
   import { formatDate, plural } from '../time';
 
   let { path, inventory }: { path: string; inventory: Inventory } = $props();
@@ -115,7 +115,7 @@
         <header class="register-head routes-cols"><span>Route</span><span>Proxy</span><span>Target</span><span>Service</span><span class="num">Cert</span></header>
         {#if visibleRoutes.length}
           {#each visibleRoutes as item}
-            <a class="register-row routes-cols" href={`/routes/${item.id}`} onclick={(event) => { event.preventDefault(); navigate(`/routes/${item.id}`); }} aria-label={`Open route ${item.domain}`}>
+            <a class="register-row routes-cols" href={appHref(`/routes/${item.id}`)} onclick={(event) => { event.preventDefault(); navigate(`/routes/${item.id}`); }} aria-label={`Open route ${item.domain}`}>
               <div data-label="Route"><strong>{item.domain}</strong><small class="mono">{item.tls ? 'https' : 'http'} · {item.path_prefix || '/'}</small></div>
               <div data-label="Proxy">{item.proxy || 'Unknown'}</div>
               <div data-label="Target"><code>{item.upstream_host}:{item.upstream_port ?? '—'}</code></div>

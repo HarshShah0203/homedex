@@ -9,6 +9,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "build": "vite build && node scripts/sync-dist.mjs",
+    "build:demo": "vite build --mode demo",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

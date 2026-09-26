@@ -9,6 +9,7 @@
   import CopyLabPage from './pages/CopyLabPage.svelte';
   import SourcesPage from './pages/SourcesPage.svelte';
   import PageHead from './PageHead.svelte';
+  import { DEMO_MODE, INSTALL_URL } from './demoMode';
   import { navigate } from './router';
 
   let { path, inventory, onrefresh = async () => {} }: { path: string; inventory: Inventory; onrefresh?: () => Promise<void> } = $props();
@@ -16,7 +17,7 @@
   let issueSummary = $derived(inventory.issues.map((issue) => `${issue.resource}: ${issue.message}`).join(' '));
 </script>
 
-{#if inventory.source === 'demo'}
+{#if inventory.source === 'demo' && !DEMO_MODE}
   <div class="summary-line" role="status"><strong>Development demo inventory</strong><span>{inventory.error || 'Showing local demo data.'}</span></div>
 {:else if inventory.readOnly}
   <div class="summary-line" role="status"><strong>Read-only shared inventory</strong><span>Settings and all mutation controls are unavailable.</span></div>
@@ -40,6 +41,11 @@
   <CopyLabPage readOnly={inventory.readOnly} />
 {:else if pathname === '/sources' || pathname.startsWith('/settings/connectors')}
   <SourcesPage {inventory} {onrefresh} />
+{:else if DEMO_MODE && pathname === '/setup'}
+  <main class="page">
+    <PageHead kicker="Setup · Live demo" title="Setup runs on your own install" copy="The setup wizard creates your admin password, connects a first read-only source, and runs the first scan live. This demo has no server behind it, so it starts from fabricated records instead." />
+    <section class="empty-register"><strong>NOTHING TO CONNECT HERE</strong><span>Two commands start Homedex on your own Docker host.</span><a class="primary-button" href={INSTALL_URL}>Install Homedex</a><button class="quiet-button" onclick={() => navigate('/')}>Back to the index</button></section>
+  </main>
 {:else}
   <main class="page">
     <PageHead kicker="Index · 404" title="No record here" copy="Nothing is filed at this address." />

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Inventory } from '../api';
   import PageHead from '../PageHead.svelte';
-  import { navigate } from '../router';
+  import { appHref, navigate } from '../router';
   import { plural, relativeTime } from '../time';
 
   let { inventory }: { inventory: Inventory } = $props();
@@ -49,10 +49,10 @@
     {#snippet actions()}<button class="quiet-button" onclick={() => navigate('/hosts')}>View hosts</button><button class="primary-button" onclick={() => navigate('/copy-my-lab')}>Copy my lab</button>{/snippet}
   </PageHead>
   <nav class="action-ledger" data-component-id="index-action-ledger" aria-label="Review queue">
-    <a href={firstUnresolved ? `/routes/${firstUnresolved.id}` : '/routes'} onclick={(event) => go(event, firstUnresolved ? `/routes/${firstUnresolved.id}` : '/routes')}><span class="number" class:zero={!unresolvedRoutes.length}>{unresolvedRoutes.length}</span><strong>unresolved {unresolvedRoutes.length === 1 ? 'route' : 'routes'}</strong>{#if firstUnresolved}<small>{firstUnresolved.domain}</small>{/if}</a>
-    <a href="/expiry" onclick={(event) => go(event, '/expiry')}><span class="number" class:zero={!urgentExpiries.length}>{urgentExpiries.length}</span><strong>expiring soon</strong>{#if nextExpiryDays !== null}<small>next {nextExpiryDays}d</small>{/if}</a>
-    <a href="/changes" onclick={(event) => go(event, '/changes')}><span class="number" class:zero={!unreviewedChanges.length}>{unreviewedChanges.length}</span><strong>unreviewed {unreviewedChanges.length === 1 ? 'change' : 'changes'}</strong></a>
-    <a href="/ports" onclick={(event) => go(event, '/ports')}><span class="number" class:zero={!publishedPorts}>{publishedPorts}</span><strong>published ports</strong><small>{inventory.ports.length} total</small></a>
+    <a href={appHref(firstUnresolved ? `/routes/${firstUnresolved.id}` : '/routes')} onclick={(event) => go(event, firstUnresolved ? `/routes/${firstUnresolved.id}` : '/routes')}><span class="number" class:zero={!unresolvedRoutes.length}>{unresolvedRoutes.length}</span><strong>unresolved {unresolvedRoutes.length === 1 ? 'route' : 'routes'}</strong>{#if firstUnresolved}<small>{firstUnresolved.domain}</small>{/if}</a>
+    <a href={appHref('/expiry')} onclick={(event) => go(event, '/expiry')}><span class="number" class:zero={!urgentExpiries.length}>{urgentExpiries.length}</span><strong>expiring soon</strong>{#if nextExpiryDays !== null}<small>next {nextExpiryDays}d</small>{/if}</a>
+    <a href={appHref('/changes')} onclick={(event) => go(event, '/changes')}><span class="number" class:zero={!unreviewedChanges.length}>{unreviewedChanges.length}</span><strong>unreviewed {unreviewedChanges.length === 1 ? 'change' : 'changes'}</strong></a>
+    <a href={appHref('/ports')} onclick={(event) => go(event, '/ports')}><span class="number" class:zero={!publishedPorts}>{publishedPorts}</span><strong>published ports</strong><small>{inventory.ports.length} total</small></a>
   </nav>
   <div class="toolbar" data-component-id="service-register-controls">
     <input class="inline-search" bind:value={query} aria-label="Filter services" placeholder={`Filter ${recordTotal} services`} />

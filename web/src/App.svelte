@@ -6,6 +6,7 @@
   import Login from './lib/Login.svelte';
   import CommandPalette from './lib/CommandPalette.svelte';
   import { createEmptyInventory, getSetupStatus, loadInventory, type Inventory } from './lib/api';
+  import { DEMO_MODE } from './lib/demoMode';
   import { navigate, route } from './lib/router';
   import { relativeTime } from './lib/time';
 
@@ -33,6 +34,11 @@
 
   onMount(async () => {
     theme = localStorage.getItem('homedex-theme') === 'dark' ? 'dark' : 'light';
+    if (DEMO_MODE) {
+      // The live demo has no server: no setup, no sign-in, just the fabricated inventory.
+      await refresh();
+      return;
+    }
     try {
       const status = await getSetupStatus();
       needsAdmin = !status.configured && !status.auth_disabled;
@@ -59,7 +65,7 @@
   });
 </script>
 
-{#if pathname === '/setup'}
+{#if pathname === '/setup' && !DEMO_MODE}
   <Setup bind:theme {needsAdmin} oncomplete={refresh} />
 {:else if authRequired}
   <Login onlogin={refresh} />

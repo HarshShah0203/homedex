@@ -1,4 +1,6 @@
-import { createDemoInventory } from './demo';
+import { createDemoInventory, createDemoNotificationRules, createDemoShares } from './demo';
+import { demoContextMarkdown, demoExportFile, demoNextFreePort, demoPortConflicts } from './demoApi';
+import { DEMO_MODE, refuseInDemo } from './demoMode';
 import type { Change, Connector, ConnectorInput, ConnectorMutation, ConnectorTest, ContextCounts, ContextExport, Expiry, Host, Inventory, InventoryIssue, InventoryIssueKind, InventoryResource, NotificationRule, NotificationRuleInput, NotificationTest, Port, Route, ScanRun, Service, Share, PortConflict, ManualEntityInput } from './types';
 
 export type { Inventory } from './types';
@@ -14,12 +16,14 @@ class APIError extends Error {
 }
 
 export async function getSetupStatus(): Promise<{ configured: boolean; auth_disabled: boolean }> {
+  if (DEMO_MODE) return { configured: true, auth_disabled: true };
   const response = await fetch('/api/setup/status', { headers: { Accept: 'application/json' } });
   if (!response.ok) throw new Error(`Setup status returned ${response.status}.`);
   return response.json();
 }
 
 export async function login(password: string): Promise<void> {
+  if (DEMO_MODE) refuseInDemo();
   const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
   if (!response.ok) throw new Error(response.status === 429 ? 'Too many attempts. Wait a minute and try again.' : 'The password was not accepted.');
   const session = await response.json();
@@ -33,6 +37,7 @@ async function list<T>(path: string): Promise<T[]> {
 }
 
 export async function loadInventory(options: { demoOnEmpty?: boolean } = {}): Promise<Inventory> {
+  if (DEMO_MODE) return createDemoInventory();
   const requests = [
     list<Service>('services'), list<Host>('hosts'), list<Port>('ports'), list<Route>('routes'), list<Change>('changes'),
     list<Expiry>('expiry'), list<Connector>('connectors')
@@ -71,10 +76,15 @@ export function createEmptyInventory(): Inventory {
 }
 
 export async function loadContextExport(): Promise<ContextExport> {
+  if (DEMO_MODE) return describeContext(await new Response(demoContextMarkdown(createDemoInventory())).arrayBuffer(), 'homedex-context.md', null);
   const response = await fetch('/api/export/context?include_private=false', { headers: { Accept: 'text/markdown' } });
   if (!response.ok) throw new Error(`The context export API returned ${response.status}.`);
 
-  const body = await response.arrayBuffer();
+  const filename = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] ?? 'homedex-context.md';
+  return describeContext(await response.arrayBuffer(), filename, response.headers.get('X-Homedex-Truncation'));
+}
+
+async function describeContext(body: ArrayBuffer, filename: string, truncationHeader: string | null): Promise<ContextExport> {
   const markdown = new TextDecoder().decode(body);
   const bytes = body.byteLength;
   const sha256 = await digest(body);
@@ -83,11 +93,11 @@ export async function loadContextExport(): Promise<ContextExport> {
     markdown,
     bytes,
     size: formatBytes(bytes),
-    filename: response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] ?? 'homedex-context.md',
+    filename,
     title: markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? 'Homedex lab context',
     schema: markdown.match(/^Schema:\s*`([^`]+)`/m)?.[1] ?? 'unknown',
     counts: contextCounts(markdown),
-    truncation: truncation(response.headers.get('X-Homedex-Truncation')),
+    truncation: truncation(truncationHeader),
     sha256,
     shortSha256: `${groupHex(sha256.slice(0, 12))} … ${sha256.slice(-4)}`
   };
@@ -122,6 +132,7 @@ export async function scanConnector(id: number): Promise<{ status: string; scan_
 }
 
 export async function loadConnectorScans(id: number): Promise<ScanRun[]> {
+  if (DEMO_MODE) return [];
   const response = await requestJSON<ListResponse<Omit<ScanRun, 'stats'> & { stats: Record<string, number> | string }>>(`/api/connectors/${id}/scans`);
   return (response.items ?? []).map((run) => ({ ...run, stats: typeof run.stats === 'string' ? parseStats(run.stats) : run.stats ?? {} }));
 }
@@ -135,6 +146,7 @@ export async function reviewChanges(ids: number[], seen: boolean): Promise<void>
 }
 
 export async function loadNotificationRules(): Promise<NotificationRule[]> {
+  if (DEMO_MODE) return createDemoNotificationRules();
   const response = await requestJSON<ListResponse<NotificationRule>>('/api/notify/rules');
   return response.items ?? [];
 }
@@ -154,12 +166,14 @@ export async function testNotificationRule(id: number): Promise<NotificationTest
 }
 
 export async function loadNextFreePort(hostID: number, start = 1024, end = 65535, protocol = 'tcp'): Promise<number> {
+  if (DEMO_MODE) return demoNextFreePort(createDemoInventory(), hostID, start, end, protocol);
   const params = new URLSearchParams({ host_id: String(hostID), start: String(start), end: String(end), protocol });
   const response = await requestJSON<{ port: number }>(`/api/ports/next-free?${params}`);
   return response.port;
 }
 
 export async function loadShares(): Promise<Share[]> {
+  if (DEMO_MODE) return createDemoShares();
   const response = await requestJSON<ListResponse<Share>>('/api/share');
   return response.items ?? [];
 }
@@ -173,6 +187,7 @@ export async function revokeShare(id: number): Promise<void> {
 }
 
 export async function loadPortConflicts(): Promise<PortConflict[]> {
+  if (DEMO_MODE) return demoPortConflicts(createDemoInventory());
   const response = await requestJSON<ListResponse<PortConflict>>('/api/ports/conflicts');
   return response.items ?? [];
 }
@@ -186,12 +201,7 @@ export async function patchEntity(type: string, id: number, patch: Record<string
 }
 
 export async function downloadExport(format: 'markdown' | 'json' | 'csv', view?: string): Promise<void> {
-  const path = `/api/export/${format}${view ? `?view=${encodeURIComponent(view)}` : ''}`;
-  const response = await fetch(path);
-  if (!response.ok) throw new Error(`The export API returned ${response.status}.`);
-  const blob = await response.blob();
-  const fallback = `homedex-export.${format === 'markdown' ? 'md' : format}`;
-  const name = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] ?? fallback;
+  const { blob, name } = DEMO_MODE ? demoExportFile(createDemoInventory(), format, view) : await fetchExport(format, view);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -200,9 +210,23 @@ export async function downloadExport(format: 'markdown' | 'json' | 'csv', view?:
   URL.revokeObjectURL(url);
 }
 
+async function fetchExport(format: 'markdown' | 'json' | 'csv', view?: string): Promise<{ blob: Blob; name: string }> {
+  const path = `/api/export/${format}${view ? `?view=${encodeURIComponent(view)}` : ''}`;
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`The export API returned ${response.status}.`);
+  const blob = await response.blob();
+  const fallback = `homedex-export.${format === 'markdown' ? 'md' : format}`;
+  const name = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] ?? fallback;
+  return { blob, name };
+}
+
 type RequestOptions = { method?: string; body?: unknown; acceptedStatuses?: number[] };
 
 async function requestJSON<T = void>(path: string, options: RequestOptions = {}): Promise<T> {
+  // The live demo has no server. Its reads are answered by the loaders above
+  // before they get here, so every request that does arrive would have
+  // changed something (or tested a real connection) and is refused.
+  if (DEMO_MODE) refuseInDemo();
   const method = options.method ?? 'GET';
   const headers: Record<string, string> = { Accept: 'application/json' };
   const csrf = typeof sessionStorage === 'undefined' ? '' : sessionStorage.getItem('homedex-csrf') ?? '';

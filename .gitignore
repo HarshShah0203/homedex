@@ -6,6 +6,7 @@
 # web build
 web/node_modules/
 web/dist/
+web/dist-demo/
 web/.svelte-kit/
 web/test-results/
 web/playwright-report/

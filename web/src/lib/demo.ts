@@ -1,4 +1,4 @@
-import type { Change, Connector, Expiry, Host, Inventory, Port, Route, Service } from './types';
+import type { Change, Connector, Expiry, Host, Inventory, NotificationRule, Port, Route, Service, Share } from './types';
 
 export const hosts: Host[] = [
   { id: 1, name: 'gateway', kind: 'docker', address: '10.0.10.5', os: 'Debian 13', arch: 'amd64', state: 'active', services: 6, ports: 11, last_seen: '2m ago' },
@@ -56,18 +56,40 @@ export const connectors: Connector[] = [
   { id:3,kind:'caddy',name:'Caddy · core-01',enabled:true,schedule_minutes:15,last_status:'error',last_error:'Connection refused: dial tcp 10.0.10.8:2019',created_at:'2026-07-16T10:40:00Z',updated_at:'2026-07-16T10:42:00Z',endpoint:'http://10.0.10.8:2019',found:'4 routes' }
 ];
 
-export function createDemoInventory(error?: string): Inventory {
+const DAY_MS = 86_400_000;
+
+function isoFrom(now: Date, offsetMs: number): string {
+  return new Date(now.getTime() + offsetMs).toISOString();
+}
+
+// Dates are anchored to `now` so the hosted live demo never shows a
+// certificate "14 days out" that lapsed months ago, or a scan from last season.
+export function createDemoInventory(error?: string, now: Date = new Date()): Inventory {
   return {
     services: services.map((item) => ({ ...item })),
     hosts: hosts.map((item) => ({ ...item })),
     ports: ports.map((item) => ({ ...item })),
     routes: routes.map((item) => ({ ...item })),
     changes: changes.map((item) => ({ ...item })),
-    expiries: expiries.map((item) => ({ ...item })),
-    connectors: connectors.map((item) => ({ ...item })),
+    expiries: expiries.map((item) => {
+      const at = item.days_remaining === null ? item.expires_at : isoFrom(now, item.days_remaining * DAY_MS);
+      return { ...item, expires_at: at, expires: at };
+    }),
+    connectors: connectors.map((item) => ({ ...item, created_at: isoFrom(now, -30 * DAY_MS), updated_at: isoFrom(now, -2 * 60_000) })),
     source: 'demo',
     readOnly: false,
     issues: [],
     ...(error ? { error } : {})
   };
+}
+
+export function createDemoNotificationRules(): NotificationRule[] {
+  return [
+    { id: 1, name: 'Expiry 14d', kind: 'expiry', threshold_days: 14, filters: {}, channels: ['ntfy'], channel_count: 1, enabled: true, created_at: '', updated_at: '' },
+    { id: 2, name: 'Changes', kind: 'change', threshold_days: null, filters: { change_kinds: ['added', 'removed'] }, channels: ['discord'], channel_count: 1, enabled: true, created_at: '', updated_at: '' }
+  ];
+}
+
+export function createDemoShares(now: Date = new Date()): Share[] {
+  return [{ id: 1, name: 'Family wiki', created_at: isoFrom(now, -3 * DAY_MS), expires_at: isoFrom(now, 4 * DAY_MS), active: true }];
 }

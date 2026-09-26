@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { Moon, Search, Sun } from 'lucide-svelte';
-  import { navigate } from './router';
+  import DemoBanner from './DemoBanner.svelte';
+  import { DEMO_MODE } from './demoMode';
+  import { appHref, navigate } from './router';
 
   let {
     path,
@@ -51,8 +53,9 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="app" data-theme={theme} data-component-id="homedex-catalog-shell">
+  {#if DEMO_MODE}<DemoBanner />{/if}
   <header class="topbar" data-component-id="global-header">
-    <a class="brand" href="/" aria-label="Homedex index" onclick={(event) => follow(event, '/')}>
+    <a class="brand" href={appHref('/')} aria-label="Homedex index" onclick={(event) => follow(event, '/')}>
       <span class="brand-mark" aria-hidden="true">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M3 8.5V5a1 1 0 0 1 1-1h6.2a1 1 0 0 1 .9.55L12 6h8a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8.5Z" fill="currentColor"/>
@@ -63,7 +66,7 @@
     </a>
     <nav class="primary-nav" data-component-id="primary-navigation" aria-label="Primary navigation">
       {#each navItems as item}
-        <a class:active={active(item.href)} href={item.href} onclick={(event) => follow(event, item.href)}>{item.label}</a>
+        <a class:active={active(item.href)} href={appHref(item.href)} onclick={(event) => follow(event, item.href)}>{item.label}</a>
       {/each}
     </nav>
     <div class="top-actions">
