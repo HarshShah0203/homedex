@@ -71,13 +71,19 @@ git tag -a v0.1.0 -m "Homedex v0.1.0"
 git push origin v0.1.0
 ```
 
-The GitHub Actions `Release` workflow creates the GitHub release and package. Verify archives, checksums, SBOMs, image architectures, image startup, and the release page before announcing availability. Then check the pull-only install from an empty directory. The separate project name keeps the check away from any Homedex already running on the same machine:
+The GitHub Actions `Release` workflow creates the GitHub release and package. Verify archives, checksums, SBOMs, image architectures, image startup, and the release page before announcing availability. Then check the pull-only install from an empty directory. The separate project name keeps the check away from any Homedex already running on the same machine, and the explicit pull matters: Compose only pulls a missing image by default, so a machine that ran an earlier check would otherwise start the cached `0.1` image and never test the new one:
 
 ```sh
+mkdir homedex-release-check
+cd homedex-release-check
 curl -fsSLO https://raw.githubusercontent.com/HarshShah0203/homedex/main/docker-compose.yml
+docker compose -p homedex-release-check pull
 HOMEDEX_PORT=17390 docker compose -p homedex-release-check up -d
 curl -fsS http://127.0.0.1:17390/api/health
+curl -fsS http://127.0.0.1:17390/api/version
 docker compose -p homedex-release-check down -v
 ```
+
+`/api/version` must report the tag you just pushed (for example `{"version":"v0.1.6"}`) whenever that tag is on the line the default file follows. An older version means the moving tag has not been published yet or the pull was skipped, so the check has not tested this release.
 
 GoReleaser marks semantic prerelease tags as prereleases automatically. A configured workflow is not evidence that any particular tag or package already exists.
