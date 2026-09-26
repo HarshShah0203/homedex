@@ -24,6 +24,12 @@ const (
 	Pinned          = "pinned"
 )
 
+// SourceKind is the connector kind whose containers update checks cover. The
+// Docker source (which also serves Podman) records the registry digests a
+// comparison needs; containers an SSH host lists carry none, so they are not
+// looked up and show no update status.
+const SourceKind = "docker"
+
 // Registry lookup outcomes stored per image reference.
 const (
 	LookupResolved = "resolved"

@@ -19,10 +19,15 @@ type imageService struct {
 	repoDigests []string
 }
 
-// loadImageServices groups the containers still observed by the reference
-// they name, the same key image_updates rows use.
+// imageCheckedServices selects, as services s, the containers update checks
+// cover: still in the inventory, naming an image, and found by a source of
+// kind imageref.SourceKind (the one query argument).
+const imageCheckedServices = `s.state!='gone' AND s.kind='container' AND s.image!='' AND s.connector_id IN (SELECT id FROM connectors WHERE kind=?)`
+
+// loadImageServices groups the containers update checks cover by the
+// reference they name, the same key image_updates rows use.
 func loadImageServices(ctx context.Context, tx *sql.Tx) (map[string][]imageService, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT image,tag,repo_digests FROM services WHERE state!='gone' AND kind='container' AND image!='' ORDER BY id`)
+	rows, err := tx.QueryContext(ctx, `SELECT s.image,s.tag,s.repo_digests FROM services s WHERE `+imageCheckedServices+` ORDER BY s.id`, imageref.SourceKind)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +103,7 @@ func applyImageUpdates(ctx context.Context, tx *sql.Tx, connectorID, runID int64
 					reason = "Last check failed: " + reason
 				}
 			}
-			if _, err = tx.ExecContext(ctx, `UPDATE image_updates SET connector_id=?,lookup=?,remote_digest=?,reason=?,checked_at=?,updated_at=? WHERE id=?`, connectorID, lookup, remote, reason, checked, now, id); err != nil {
+			if _, err = tx.ExecContext(ctx, `UPDATE image_updates SET connector_id=?,lookup=?,remote_digest=?,reason=?,checked_at=?,retired_at=NULL,updated_at=? WHERE id=?`, connectorID, lookup, remote, reason, checked, now, id); err != nil {
 				return 0, err
 			}
 		}
@@ -130,8 +135,11 @@ func applyImageUpdates(ctx context.Context, tx *sql.Tx, connectorID, runID int64
 		changes++
 	}
 	// A reference no container runs any more (or one this source now skips) has
-	// nothing to report; its lookup is derived data, so it is removed outright.
-	rows, err := tx.QueryContext(ctx, `SELECT id,image_ref FROM image_updates WHERE connector_id=?`, connectorID)
+	// nothing to report, so its row is retired: the services API ignores it.
+	// It is kept, with the digest the change feed last reported, until
+	// PurgeGone's retention passes, so a container recreated on the same old
+	// image does not file the same update a second time.
+	rows, err := tx.QueryContext(ctx, `SELECT id,image_ref FROM image_updates WHERE connector_id=? AND retired_at IS NULL`, connectorID)
 	if err != nil {
 		return 0, err
 	}
@@ -152,9 +160,15 @@ func applyImageUpdates(ctx context.Context, tx *sql.Tx, connectorID, runID int64
 		return 0, err
 	}
 	for _, id := range stale {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM image_updates WHERE id=?`, id); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE image_updates SET retired_at=?,updated_at=? WHERE id=?`, now, now, id); err != nil {
 			return 0, err
 		}
 	}
 	return changes, nil
+}
+
+// purgeRetiredImageUpdates deletes lookups retired before cutoff.
+func purgeRetiredImageUpdates(ctx context.Context, tx *sql.Tx, cutoff string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM image_updates WHERE retired_at IS NOT NULL AND retired_at < ?`, cutoff)
+	return err
 }

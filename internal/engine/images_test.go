@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -143,24 +144,108 @@ func TestImageUpdatesFileOneChangePerNewDigestAndNeverRepeat(t *testing.T) {
 		t.Fatalf("already-current image filed a change: n=%d err=%v", n, err)
 	}
 
-	// References no container runs any more are dropped.
+	// References no container runs any more are retired.
 	if _, _, err = a.Apply(ctx, registryID, domain.Snapshot{ImageUpdates: []domain.ImageUpdate{resolved("traefik/whoami:v1.10.0", whoamiV3)}}); err != nil {
 		t.Fatal(err)
 	}
-	var refs int
-	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM image_updates`).Scan(&refs); err != nil || refs != 1 {
-		t.Fatalf("image_updates rows = %d, %v", refs, err)
+	var refs, retired int
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM image_updates WHERE retired_at IS NULL`).Scan(&refs); err != nil || refs != 1 {
+		t.Fatalf("current image_updates rows = %d, %v", refs, err)
 	}
-	// A Docker scan never owns lookups, so it never removes them.
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM image_updates WHERE retired_at IS NOT NULL`).Scan(&retired); err != nil || retired != 3 {
+		t.Fatalf("retired image_updates rows = %d, %v", retired, err)
+	}
+	// A Docker scan never owns lookups, so it never changes them.
 	if _, _, err = a.Apply(ctx, dockerID, imageLab([]string{"traefik/whoami@" + whoamiOld}, []string{"nginx@" + nginxNext})); err != nil {
 		t.Fatal(err)
 	}
-	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM image_updates`).Scan(&refs); err != nil || refs != 1 {
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM image_updates WHERE retired_at IS NULL`).Scan(&refs); err != nil || refs != 1 {
 		t.Fatalf("docker scan touched image_updates: %d, %v", refs, err)
 	}
 	var total int
 	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM changes WHERE entity_type='image'`).Scan(&total); err != nil || total != 2 {
 		t.Fatalf("image change entries = %d, want 2", total)
+	}
+}
+
+// A container removed and later re-created on the same old image (or an image
+// skipped and then checked again) must not report the same published digest
+// a second time. The lookup is retired while nothing runs the reference, keeps
+// the digest it reported, and is purged only after the gone retention.
+func TestImageUpdateForAReturningReferenceIsNotFiledTwice(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	dockerID, _ := st.CreateConnector(ctx, "docker", "Docker", nil)
+	registryID, _ := st.CreateConnector(ctx, "registry", "Image updates", nil)
+	a := New(st, nil)
+	clock := time.Date(2026, 9, 26, 6, 0, 0, 0, time.UTC)
+	a.now = func() time.Time { return clock }
+	host := domain.Host{Key: "docker:nas", Name: "nas", Kind: "docker"}
+	whoami := domain.Service{Key: "docker:nas:whoami", HostKey: "docker:nas", Name: "whoami", Kind: "container", Image: "traefik/whoami", Tag: "v1.10.0", State: "running", RepoDigests: []string{"traefik/whoami@" + whoamiOld}}
+	withWhoami := domain.Snapshot{Hosts: []domain.Host{host}, Services: []domain.Service{whoami}}
+	without := domain.Snapshot{Hosts: []domain.Host{host}}
+	check := func(digest string) domain.Snapshot {
+		return domain.Snapshot{ImageUpdates: []domain.ImageUpdate{{Ref: "traefik/whoami:v1.10.0", Lookup: imageref.LookupResolved, RemoteDigest: digest, CheckedAt: clock}}}
+	}
+	total := func() int {
+		var n int
+		if err := st.DB().QueryRow(`SELECT COUNT(*) FROM changes WHERE entity_type='image'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if _, _, err = a.Apply(ctx, dockerID, withWhoami); err != nil {
+		t.Fatal(err)
+	}
+	if _, n, err := a.Apply(ctx, registryID, check(whoamiNew)); err != nil || n != 1 {
+		t.Fatalf("first report: n=%d err=%v", n, err)
+	}
+	// The container is removed; the next check has no reference to look up.
+	if _, _, err = a.Apply(ctx, dockerID, without); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = a.Apply(ctx, registryID, domain.Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	// It comes back on the same old image, and the registry still serves the
+	// digest already reported: nothing new to say.
+	clock = clock.Add(5 * 24 * time.Hour)
+	if _, _, err = a.Apply(ctx, dockerID, withWhoami); err != nil {
+		t.Fatal(err)
+	}
+	if _, n, err := a.Apply(ctx, registryID, check(whoamiNew)); err != nil || n != 0 || total() != 1 {
+		t.Fatalf("returning reference filed again: n=%d total=%d err=%v", n, total(), err)
+	}
+	var retiredAt sql.NullString
+	if err = st.DB().QueryRow(`SELECT retired_at FROM image_updates WHERE image_ref='traefik/whoami:v1.10.0'`).Scan(&retiredAt); err != nil || retiredAt.Valid {
+		t.Fatalf("returning reference still retired: %v, %v", retiredAt, err)
+	}
+	// A build it has not reported yet still files one entry.
+	if _, n, err := a.Apply(ctx, registryID, check(whoamiV3)); err != nil || n != 1 {
+		t.Fatalf("next build: n=%d err=%v", n, err)
+	}
+	// Retired rows go once the gone retention has passed, and not before.
+	if _, _, err = a.Apply(ctx, registryID, domain.Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(29 * 24 * time.Hour)
+	if err = a.PurgeGone(ctx, DefaultGoneRetention); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM image_updates`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("retired row purged early: %d, %v", rows, err)
+	}
+	clock = clock.Add(2 * 24 * time.Hour)
+	if err = a.PurgeGone(ctx, DefaultGoneRetention); err != nil {
+		t.Fatal(err)
+	}
+	if err = st.DB().QueryRow(`SELECT COUNT(*) FROM image_updates`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("retired row kept past retention: %d, %v", rows, err)
 	}
 }
 
@@ -232,20 +317,28 @@ func TestRunnerHandsTheRegistryTheDeployedReferences(t *testing.T) {
 	ctx := context.Background()
 	st, _ := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
 	defer st.Close()
+	dockerID, _ := st.CreateConnector(ctx, "docker", "Docker", nil)
+	sshID, _ := st.CreateConnector(ctx, "ssh", "SSH host", nil)
 	now := "2026-01-01T00:00:00Z"
-	for _, row := range [][4]string{
-		{"a", "traefik/whoami", "v1.10.0", "running"},
-		{"b", "traefik/whoami", "v1.10.0", "exited"},
-		{"c", "nginx", "", "running"},
-		{"d", "redis", whoamiNew, "running"},
-		{"e", "old/app", "1", "gone"},
-		{"f", "", "", "running"},
+	for _, row := range []struct {
+		source                  int64
+		name, image, tag, state string
+	}{
+		{dockerID, "a", "traefik/whoami", "v1.10.0", "running"},
+		{dockerID, "b", "traefik/whoami", "v1.10.0", "exited"},
+		{dockerID, "c", "nginx", "", "running"},
+		{dockerID, "d", "redis", whoamiNew, "running"},
+		{dockerID, "e", "old/app", "1", "gone"},
+		{dockerID, "f", "", "", "running"},
+		// An SSH host lists containers without registry digests: checking
+		// their images could never produce a comparison.
+		{sshID, "g", "lscr.io/linuxserver/sonarr", "latest", "running"},
 	} {
-		if _, err := st.DB().Exec(`INSERT INTO services(name,kind,image,tag,state,first_seen,last_seen,natural_key,created_at,updated_at) VALUES(?, 'container',?,?,?,?,?,?,?,?)`, row[0], row[1], row[2], row[3], now, now, row[0], now, now); err != nil {
+		if _, err := st.DB().Exec(`INSERT INTO services(connector_id,name,kind,image,tag,state,first_seen,last_seen,natural_key,created_at,updated_at) VALUES(?,?,'container',?,?,?,?,?,?,?,?)`, row.source, row.name, row.image, row.tag, row.state, now, now, row.name, now, now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := st.DB().Exec(`INSERT INTO services(name,kind,image,tag,state,first_seen,last_seen,natural_key,created_at,updated_at) VALUES('manual','manual','manual/app','1','active',?,?,'manual:x',?,?)`, now, now, now, now); err != nil {
+	if _, err := st.DB().Exec(`INSERT INTO services(connector_id,name,kind,image,tag,state,first_seen,last_seen,natural_key,created_at,updated_at) VALUES(?,'manual','manual','manual/app','1','active',?,?,'manual:x',?,?)`, dockerID, now, now, now, now); err != nil {
 		t.Fatal(err)
 	}
 	runner := &Runner{Store: st}
@@ -261,5 +354,13 @@ func TestRunnerHandsTheRegistryTheDeployedReferences(t *testing.T) {
 	runner.addImageTargets(ctx, "tlsprobe", other)
 	if _, ok := other["images"]; ok {
 		t.Fatal("images injected into another connector kind")
+	}
+	// A source being added is tested with the same references, even when the
+	// form sent no config at all.
+	added := runner.AddTargets(ctx, "registry", nil)
+	got = nil
+	_ = json.Unmarshal(added["images"], &got)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("unsaved source images = %v, want %v", got, want)
 	}
 }

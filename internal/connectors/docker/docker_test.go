@@ -207,6 +207,19 @@ func TestScanRecordsRepoDigestsOfTheRunningImage(t *testing.T) {
 		t.Fatalf("repo digests = %v", got)
 	}
 
+	// Under the containerd image store a Compose-built image reports its own
+	// build digest as a repo digest; it was never pulled, so none is recorded.
+	api = &fakeAPI{list: list, inspect: inspect, images: []imagetypes.Summary{
+		{ID: list[0].ImageID, RepoDigests: []string{"jellyfin/jellyfin@" + index}, Labels: map[string]string{"com.docker.compose.project": "media", "com.docker.compose.service": "jellyfin"}},
+	}}
+	c.newClient = func(Config) (API, error) { return api, nil }
+	if snap, err = c.Scan(context.Background(), connectors.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := snap.Services[0].RepoDigests; len(got) != 0 {
+		t.Fatalf("locally built image recorded repo digests %v", got)
+	}
+
 	// A socket proxy with IMAGES=0 refuses the list; the inventory scan still works.
 	api = &fakeAPI{list: list, inspect: inspect, imagesErr: errors.New("403 Forbidden")}
 	c.newClient = func(Config) (API, error) { return api, nil }

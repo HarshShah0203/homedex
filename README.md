@@ -67,7 +67,7 @@ It seeds the real SQLite schema and API with 3 hosts, 12 services, 16 port alloc
 | Tailscale | Read-only device list from the Tailscale API (OAuth client with `devices:core:read`, or an API access token): hostnames, tailnet IPs, MagicDNS names, OS, and last seen; routes to tailnet names resolve to the service on the same machine |
 | Route resolution | Joins upstreams to container network IPs, names/aliases, or host-published ports; unresolved routes are marked broken |
 | Expiry data | Probes explicit TLS targets and queries explicit registrable domains through RDAP connectors |
-| Image updates | Opt-in daily check of the tags running containers use against their registries (Docker Hub, ghcr.io, lscr.io, quay.io, others via their token challenge) with anonymous, read-only manifest `HEAD` requests: badges and filters containers whose tag now points at a newer build, reports pinned and unknown images honestly, and files one change-feed entry per newly published digest |
+| Image updates | Opt-in daily check of the tags Docker-source containers run against their registries (Docker Hub, ghcr.io, lscr.io, quay.io, others via their token challenge) with anonymous, read-only manifest `HEAD` requests: badges and filters containers whose tag now points at a newer build, reports pinned and unknown images honestly, and files one change-feed entry per newly published digest |
 | Inventory | Services, hosts, ports, routes, certificates, domains, connector status, scan history, and changes in SQLite |
 | Search | FTS-backed API search plus the UI command palette |
 | Scanning | Scan-on-create/update, manual scan API, and enabled-connector schedules (15 minutes by default) |

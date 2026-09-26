@@ -3,9 +3,12 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -458,7 +461,10 @@ func TestScanCancellationAbortsButADeadlineKeepsPartialResults(t *testing.T) {
 		}
 	})
 	t.Cleanup(func() { close(release) })
-	c := connectorFor(map[string]string{"reg.test": reg.URL})
+	fast := newRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Docker-Content-Digest", indexDigest)
+	})
+	c := connectorFor(map[string]string{"reg.test": reg.URL, "fast.test": fast.URL})
 	refs := []string{"reg.test/a:1", "reg.test/b:1", "reg.test/c:1", "reg.test/d:1", "reg.test/e:1", "reg.test/f:1"}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -467,19 +473,197 @@ func TestScanCancellationAbortsButADeadlineKeepsPartialResults(t *testing.T) {
 		t.Fatal("cancelled scan returned no error")
 	}
 
-	ctx, cancelDeadline := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	// A registry answered before the deadline: the scan counts, and the tags
+	// it could not finish are transient, so their previous answers stay.
+	ctx, cancelDeadline := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancelDeadline()
-	snap, err := c.Scan(ctx, cfgWith(refs, nil))
+	snap, err := c.Scan(ctx, cfgWith(append([]string{"fast.test/app:1"}, refs...), nil))
 	if err != nil {
 		t.Fatalf("deadline failed the scan: %v", err)
 	}
-	if len(snap.ImageUpdates) != len(refs) {
+	if len(snap.ImageUpdates) != len(refs)+1 {
 		t.Fatalf("results = %+v", snap.ImageUpdates)
 	}
 	for _, u := range snap.ImageUpdates {
+		if u.Ref == "fast.test/app:1" {
+			if u.Lookup != imageref.LookupResolved {
+				t.Fatalf("answered lookup = %+v", u)
+			}
+			continue
+		}
 		if u.Lookup != imageref.LookupUnknown || !u.Transient {
 			t.Fatalf("timed-out lookup = %+v", u)
 		}
+	}
+
+	// Nothing answered before the deadline: that is a scan that checked
+	// nothing, and it fails rather than passing as a success.
+	ctx, cancelNothing := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelNothing()
+	if _, err = c.Scan(ctx, cfgWith(refs, nil)); err == nil || !strings.Contains(err.Error(), "no registry could be reached for 6 image tags") {
+		t.Fatalf("scan with no answer before its deadline: %v", err)
+	}
+}
+
+// A firewall that drops packets makes every request wait for its timeout. A
+// second failure with no answer marks the registry down, the rest of its tags
+// are not sent at all, and a scan in which nothing answered fails however
+// many tags there are.
+func TestScanStopsContactingARegistryThatDropsConnections(t *testing.T) {
+	var hits atomic.Int32
+	stall := make(chan struct{})
+	blackhole := newRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		select {
+		case <-stall:
+		case <-r.Context().Done():
+		}
+	})
+	t.Cleanup(func() { close(stall) })
+	c := connectorFor(map[string]string{"docker.io": blackhole.URL})
+	var refs []string
+	for i := 0; i < 30; i++ {
+		refs = append(refs, fmt.Sprintf("library/app%02d:1", i))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := c.Scan(ctx, cfgWith(refs, map[string]any{"timeout_seconds": 1}))
+	if err == nil || !strings.Contains(err.Error(), "no registry could be reached for 30 image tags") {
+		t.Fatalf("blackholed registry: %v", err)
+	}
+	// The workers in flight when it is marked down, plus at most one worker
+	// that moved on after the first failure.
+	maxHits := int32(concurrency + downAfter - 1)
+	if n := hits.Load(); n > maxHits {
+		t.Fatalf("requests to a registry that never answered = %d, want at most %d", n, maxHits)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("scan took %s: skipped tags still waited", elapsed)
+	}
+
+	// Next to a registry that answers, the dropped registry's tags are
+	// transient (their previous answers stay) and say why they were skipped.
+	up := newRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Docker-Content-Digest", indexDigest)
+	})
+	c = connectorFor(map[string]string{"docker.io": blackhole.URL, "ghcr.io": up.URL})
+	snap, err := c.Scan(context.Background(), cfgWith(append(refs, "ghcr.io/org/app:1"), map[string]any{"timeout_seconds": 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped := 0
+	for _, u := range snap.ImageUpdates {
+		switch {
+		case u.Ref == "ghcr.io/org/app:1":
+			if u.Lookup != imageref.LookupResolved {
+				t.Fatalf("reachable registry = %+v", u)
+			}
+		case !u.Transient || u.Lookup != imageref.LookupUnknown:
+			t.Fatalf("dropped registry tag = %+v", u)
+		case strings.Contains(u.Reason, "earlier in this scan"):
+			skipped++
+		}
+	}
+	if skipped < len(refs)-int(maxHits) {
+		t.Fatalf("skipped = %d of %d", skipped, len(refs))
+	}
+}
+
+// A registry that answered once is reachable, only slow: one timeout does not
+// stop its other tags from being checked.
+func TestScanKeepsCheckingARegistryThatAnsweredBeforeATimeout(t *testing.T) {
+	stall := make(chan struct{})
+	reg := newRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/slow/") {
+			select {
+			case <-stall:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		w.Header().Set("Docker-Content-Digest", indexDigest)
+	})
+	t.Cleanup(func() { close(stall) })
+	c := connectorFor(map[string]string{"reg.test": reg.URL})
+	refs := []string{"reg.test/slow:1"}
+	for i := 0; i < 12; i++ {
+		refs = append(refs, fmt.Sprintf("reg.test/app%02d:1", i))
+	}
+	snap, err := c.Scan(context.Background(), cfgWith(refs, map[string]any{"timeout_seconds": 1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range snap.ImageUpdates {
+		if u.Ref == "reg.test/slow:1" {
+			if !u.Transient || !strings.Contains(u.Reason, "timeout") {
+				t.Fatalf("slow tag = %+v", u)
+			}
+		} else if u.Lookup != imageref.LookupResolved {
+			t.Fatalf("%s after a timeout = %+v", u.Ref, u)
+		}
+	}
+}
+
+// One network hiccup costs one lookup; a second failure with no answer in
+// between marks the host down; any answer brings it back.
+func TestSessionMarksAHostDownOnlyAfterRepeatedNetworkFailures(t *testing.T) {
+	s := connectorFor(nil).session(config{})
+	refused := &url.Error{Op: "Head", URL: "https://reg.test/v2/", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+	s.recordFailure("reg.test", refused)
+	if err := s.downError("reg.test"); err != nil {
+		t.Fatalf("down after one failure: %v", err)
+	}
+	s.recordFailure("reg.test", refused)
+	if err := s.downError("reg.test"); err == nil || !errors.Is(err, refused) {
+		t.Fatalf("not down after two failures: %v", err)
+	}
+	if out := s.failed(context.Background(), s.downError("reg.test")); !out.transient || !strings.Contains(out.reason, "earlier in this scan") {
+		t.Fatalf("skipped lookup = %+v", out)
+	}
+	s.markAnswered("reg.test")
+	if err := s.downError("reg.test"); err != nil {
+		t.Fatalf("still down after an answer: %v", err)
+	}
+	// A host that has answered is only slow or flaky when it later fails.
+	s.recordFailure("reg.test", refused)
+	s.recordFailure("reg.test", refused)
+	if err := s.downError("reg.test"); err != nil {
+		t.Fatalf("answered host marked down: %v", err)
+	}
+	// An answer that is not HTTP (TLS, a plain-HTTP registry) is not a
+	// network failure: the next lookup still tries.
+	tlsErr := &url.Error{Op: "Head", URL: "https://lan.test/v2/", Err: errors.New("http: server gave HTTP response to HTTPS client")}
+	s.recordFailure("lan.test", tlsErr)
+	s.recordFailure("lan.test", tlsErr)
+	if err := s.downError("lan.test"); err != nil {
+		t.Fatalf("protocol error marked the host down: %v", err)
+	}
+	if s.firstFailure() != refused {
+		t.Fatalf("first failure = %v", s.firstFailure())
+	}
+}
+
+func TestFeedOrderInterleavesRegistriesAndRotatesDaily(t *testing.T) {
+	keys := []string{"docker.io/library/a:1", "docker.io/library/b:1", "docker.io/library/c:1", "ghcr.io/o/x:1", "quay.io/o/y:1"}
+	parsed := map[string]imageref.Ref{}
+	for _, key := range keys {
+		ref, err := imageref.Parse(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed[key] = ref
+	}
+	got := strings.Join(feedOrder(keys, parsed, 0), " ")
+	if want := "docker.io/library/a:1 ghcr.io/o/x:1 quay.io/o/y:1 docker.io/library/b:1 docker.io/library/c:1"; got != want {
+		t.Fatalf("day 0 order = %s", got)
+	}
+	got = strings.Join(feedOrder(keys, parsed, 1), " ")
+	if want := "docker.io/library/b:1 ghcr.io/o/x:1 quay.io/o/y:1 docker.io/library/c:1 docker.io/library/a:1"; got != want {
+		t.Fatalf("day 1 order = %s", got)
+	}
+	if len(feedOrder(nil, parsed, 5)) != 0 {
+		t.Fatal("empty feed")
 	}
 }
 
@@ -491,8 +675,11 @@ func TestScanFailsWhenNoRegistryCanBeReached(t *testing.T) {
 		w.Header().Set("Docker-Content-Digest", indexDigest)
 	})
 	c := connectorFor(map[string]string{"down.test": closedURL, "up.test": reachable.URL})
-	if _, err := c.Scan(context.Background(), cfgWith([]string{"down.test/a:1", "down.test/b:1", "nginx@" + indexDigest}, nil)); err == nil || !strings.Contains(err.Error(), "no registry could be reached for 2 image tags") {
+	if _, err := c.Scan(context.Background(), cfgWith([]string{"down.test/a:1", "down.test/b:1", "nginx@" + indexDigest}, nil)); err == nil || !strings.Contains(err.Error(), "no registry could be reached for 2 image tags;") {
 		t.Fatalf("unreachable registries: %v", err)
+	}
+	if _, err := c.Scan(context.Background(), cfgWith([]string{"down.test/a:1"}, nil)); err == nil || !strings.Contains(err.Error(), "no registry could be reached for 1 image tag;") {
+		t.Fatalf("one unreachable tag: %v", err)
 	}
 	// One reachable registry is enough for the scan to count: the unreachable
 	// tags are transient unknowns that keep their previous answers.
@@ -556,6 +743,46 @@ func TestValidatePingsTheRegistryAnonymously(t *testing.T) {
 		if err := c.Validate(context.Background(), cfg); err == nil {
 			t.Errorf("config %v accepted", bad)
 		}
+	}
+}
+
+// A lab whose egress allows only the registries its images come from must be
+// able to pass the test: Docker Hub is not contacted when no container uses
+// it, and one unreachable registry does not fail the test while another of
+// the containers' registries answers, the same rule a scan uses.
+func TestValidatePingsTheContainersRegistriesAndPassesWhenOneAnswers(t *testing.T) {
+	hub := newRegistry(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("Docker Hub contacted although no container uses it: %s %s", r.Method, r.URL.Path)
+	})
+	ghcr := newRegistry(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
+	lscr := newRegistry(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+	down := newRegistry(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) })
+	c := connectorFor(map[string]string{"docker.io": hub.URL, "ghcr.io": ghcr.URL, "lscr.io": lscr.URL, "registry.lan": closedURL, "down.test": down.URL})
+
+	images := []string{"ghcr.io/home-assistant/home-assistant:stable", "lscr.io/linuxserver/sonarr:latest", "registry.lan/app:1"}
+	if err := c.Validate(context.Background(), cfgWith(images, nil)); err != nil {
+		t.Fatalf("ghcr and lscr only: %v", err)
+	}
+	// The LAN registry sorts first and is not reachable over HTTPS; the others answer.
+	if err := c.Validate(context.Background(), cfgWith([]string{"registry.lan/app:1", "registry.lan/other:1", "lscr.io/linuxserver/sonarr:latest"}, nil)); err != nil {
+		t.Fatalf("one unreachable registry failed the test: %v", err)
+	}
+	for _, req := range append(ghcr.requests(), lscr.requests()...) {
+		if req != "GET /v2/" {
+			t.Fatalf("test sent %s", req)
+		}
+	}
+	// Excluded images are not the containers' registries as far as the test goes.
+	err := c.Validate(context.Background(), cfgWith([]string{"registry.lan/app:1", "down.test/app:1", "lscr.io/linuxserver/sonarr:latest"}, map[string]any{"exclude": []string{"lscr.io/"}}))
+	if err == nil || !strings.Contains(err.Error(), "registry registry.lan is not reachable") || !strings.Contains(err.Error(), "registry down.test answered 502") {
+		t.Fatalf("every registry down: %v", err)
+	}
+	// At most three registries are pinged, Docker Hub first when containers use it.
+	if got := c.testDomains(config{Images: []string{"a.test/x:1", "b.test/x:1", "b.test/y:1", "c.test/x:1", "d.test/x:1", "nginx:1", "redis@" + indexDigest}}); strings.Join(got, ",") != "docker.io,b.test,a.test" {
+		t.Fatalf("test domains = %v", got)
 	}
 }
 

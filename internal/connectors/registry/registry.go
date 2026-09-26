@@ -43,6 +43,8 @@ const (
 	maxChallengeBytes = 4 << 10
 	maxRedirects      = 5
 	userAgent         = "homedex-registry-check"
+	// maxTestRegistries bounds the registries one test pings.
+	maxTestRegistries = 3
 )
 
 // manifestAccept asks for exactly what `docker pull` stores a digest of: the
@@ -116,41 +118,90 @@ func (x config) timeout() time.Duration {
 	return time.Duration(x.TimeoutSeconds) * time.Second
 }
 
-// Validate checks the config and that a registry answers the API base
-// endpoint anonymously: Docker Hub when containers use it or none are known
-// yet, otherwise the first registry the containers use.
+// Validate checks the config and that the registries the containers use
+// answer the API base endpoint anonymously. It pings up to three of them at
+// once and passes as soon as one answers, the same rule a scan uses: one
+// reachable registry is enough for a scan to count.
 func (c *Connector) Validate(ctx context.Context, raw connectors.Config) error {
 	cfg, err := parse(raw)
 	if err != nil {
 		return err
 	}
-	target := ""
-	for _, ref := range c.targets(cfg) {
-		parsed, e := imageref.Parse(ref)
-		if e != nil || parsed.Digest != "" {
-			continue
-		}
-		if parsed.Domain == "docker.io" {
-			target = parsed.Domain
-			break
-		}
-		if target == "" {
-			target = parsed.Domain
-		}
-	}
-	if target == "" {
-		target = "docker.io"
-	}
+	domains := c.testDomains(cfg)
 	s := c.session(cfg)
-	res, err := s.do(ctx, http.MethodGet, c.baseURL(target)+"/v2/", "", "application/json")
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type answer struct {
+		i   int
+		err error
+	}
+	answers := make(chan answer, len(domains))
+	for i, domain := range domains {
+		go func(i int, domain string) { answers <- answer{i, s.ping(ctx, domain)} }(i, domain)
+	}
+	errs := make([]error, len(domains))
+	for range domains {
+		a := <-answers
+		if a.err == nil {
+			return nil
+		}
+		errs[a.i] = a.err
+	}
+	if len(errs) == 1 {
+		return errs[0]
+	}
+	messages := make([]string, len(errs))
+	for i, err := range errs {
+		messages[i] = err.Error()
+	}
+	return fmt.Errorf("none of the registries your containers use answered: %s", strings.Join(messages, "; "))
+}
+
+// testDomains picks the registries a test pings: Docker Hub first when a
+// container uses it, then the others by how many tags they serve, at most
+// maxTestRegistries. With no containers known yet it is Docker Hub alone.
+func (c *Connector) testDomains(cfg config) []string {
+	counts := map[string]int{}
+	for _, ref := range c.targets(cfg) {
+		if parsed, err := imageref.Parse(ref); err == nil && parsed.Digest == "" {
+			counts[parsed.Domain]++
+		}
+	}
+	if len(counts) == 0 {
+		return []string{"docker.io"}
+	}
+	domains := make([]string, 0, len(counts))
+	for domain := range counts {
+		domains = append(domains, domain)
+	}
+	sort.Slice(domains, func(i, j int) bool {
+		a, b := domains[i], domains[j]
+		if (a == "docker.io") != (b == "docker.io") {
+			return a == "docker.io"
+		}
+		if counts[a] != counts[b] {
+			return counts[a] > counts[b]
+		}
+		return a < b
+	})
+	if len(domains) > maxTestRegistries {
+		domains = domains[:maxTestRegistries]
+	}
+	return domains
+}
+
+// ping sends one anonymous GET of the registry's API base endpoint. 200 and
+// 401 (a challenge) both mean the registry is there.
+func (s *session) ping(ctx context.Context, domain string) error {
+	res, err := s.do(ctx, http.MethodGet, s.c.baseURL(domain)+"/v2/", "", "application/json")
 	if err != nil {
-		return fmt.Errorf("registry %s is not reachable: %w", target, err)
+		return fmt.Errorf("registry %s is not reachable: %w", domain, err)
 	}
 	res.Body.Close()
 	if res.StatusCode == http.StatusOK || res.StatusCode == http.StatusUnauthorized {
 		return nil
 	}
-	return fmt.Errorf("registry %s answered %s", target, res.Status)
+	return fmt.Errorf("registry %s answered %s", domain, res.Status)
 }
 
 // targets returns the references to check: unique, sorted, not excluded.
@@ -188,10 +239,7 @@ type outcome struct {
 	digest    string
 	reason    string
 	transient bool
-	// unreachable is set when no HTTP answer came back at all; its error is
-	// kept to explain a scan in which no registry could be reached.
-	unreachable error
-	at          time.Time
+	at        time.Time
 }
 
 func unknown(reason string) outcome { return outcome{lookup: imageref.LookupUnknown, reason: reason} }
@@ -254,7 +302,7 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 		}()
 	}
 feed:
-	for _, key := range keys {
+	for _, key := range feedOrder(keys, parsedByKey, c.now().Unix()/86400) {
 		select {
 		case jobs <- key:
 		case <-ctx.Done():
@@ -266,23 +314,16 @@ feed:
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return domain.Snapshot{}, ctx.Err()
 	}
-	// Like a TLS probe whose every target failed: when not one registry could
-	// be reached the scan fails, so the source reads as not connected and the
+	// Like a TLS probe whose every target failed: when not one registry
+	// answered anything, whether every request failed or the scan's time ran
+	// out first, the scan fails, so the source reads as not connected and the
 	// previous answers stay, instead of a success that checked nothing.
-	if len(keys) > 0 {
-		var first error
-		unreachable := 0
-		for _, key := range keys {
-			if err := answers[key].unreachable; err != nil {
-				unreachable++
-				if first == nil {
-					first = err
-				}
-			}
+	if len(keys) > 0 && !s.answeredAny() {
+		cause := s.firstFailure()
+		if cause == nil {
+			cause = errors.New("no registry answered before the scan's time limit")
 		}
-		if unreachable == len(keys) {
-			return domain.Snapshot{}, fmt.Errorf("no registry could be reached for %d image tags; allow HTTPS egress to the registries your images come from: %w", len(keys), first)
-		}
+		return domain.Snapshot{}, fmt.Errorf("no registry could be reached for %s; allow HTTPS egress to the registries your images come from: %w", tagCount(len(keys)), cause)
 	}
 	now := c.now().UTC()
 	var snap domain.Snapshot
@@ -302,8 +343,56 @@ feed:
 	return snap, nil
 }
 
+// feedOrder is the order lookups start in. Tags are interleaved by registry,
+// so one slow registry cannot hold every worker while the others wait, and
+// each registry's list starts at an offset that moves every day, so a scan
+// its deadline cuts short does not skip the same tags every time.
+func feedOrder(keys []string, parsed map[string]imageref.Ref, day int64) []string {
+	byDomain := map[string][]string{}
+	var domains []string
+	for _, key := range keys {
+		d := parsed[key].Domain
+		if _, ok := byDomain[d]; !ok {
+			domains = append(domains, d)
+		}
+		byDomain[d] = append(byDomain[d], key)
+	}
+	sort.Strings(domains)
+	longest := 0
+	for _, d := range domains {
+		list := byDomain[d]
+		if n := len(list); n > 1 {
+			start := int(day % int64(n))
+			if start < 0 {
+				start += n
+			}
+			byDomain[d] = append(append(make([]string, 0, n), list[start:]...), list[:start]...)
+		}
+		if len(list) > longest {
+			longest = len(list)
+		}
+	}
+	out := make([]string, 0, len(keys))
+	for i := 0; i < longest; i++ {
+		for _, d := range domains {
+			if list := byDomain[d]; i < len(list) {
+				out = append(out, list[i])
+			}
+		}
+	}
+	return out
+}
+
+func tagCount(n int) string {
+	if n == 1 {
+		return "1 image tag"
+	}
+	return fmt.Sprintf("%d image tags", n)
+}
+
 // session is the per-scan state: one HTTP client, cached anonymous tokens,
-// registries that answered 429, and the request budget.
+// registries that answered 429, which hosts answered or failed at the network
+// level, and the request budget.
 type session struct {
 	c        *Connector
 	client   *http.Client
@@ -311,7 +400,30 @@ type session struct {
 	mu       sync.Mutex
 	tokens   map[string]*tokenEntry
 	limited  map[string]bool
+	// answered holds every host that returned an HTTP response in this scan.
+	answered map[string]bool
+	// netFailures counts connections to a host that failed (refused, dropped,
+	// timed out, no DNS) while it had not answered anything. From downAfter
+	// on, the host is down: not contacted again in this scan, so a firewall
+	// that drops packets costs a timeout per worker instead of one per tag,
+	// while a single hiccup costs only the one lookup.
+	netFailures map[string]int
+	down        map[string]error
+	// failure is the first request error, to explain a scan nothing answered.
+	failure error
 }
+
+// downAfter is how many network failures, with no answer in between, mark a
+// host down for the rest of a scan.
+const downAfter = 2
+
+// skippedError is returned instead of contacting a host that is down.
+type skippedError struct{ cause error }
+
+func (e *skippedError) Error() string {
+	return "not contacted again after it could not be reached earlier in this scan: " + e.cause.Error()
+}
+func (e *skippedError) Unwrap() error { return e.cause }
 
 // tokenEntry is one token fetch, shared by every lookup that needs the same
 // scope while it is in flight or after it finished.
@@ -329,12 +441,15 @@ func (c *Connector) session(cfg config) *session {
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
-	client := &http.Client{
+	s := &session{c: c, tokens: map[string]*tokenEntry{}, limited: map[string]bool{}, answered: map[string]bool{}, netFailures: map[string]int{}, down: map[string]error{}}
+	s.client = &http.Client{
 		Timeout:   cfg.timeout(),
 		Transport: transport,
 		// Go drops the Authorization header when a redirect leaves the host,
 		// so a token only ever reaches the registry that asked for it.
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// The redirect itself is an answer from the host that sent it.
+			s.markAnswered(via[len(via)-1].URL.Host)
 			if len(via) >= maxRedirects {
 				return errors.New("too many redirects")
 			}
@@ -344,23 +459,96 @@ func (c *Connector) session(cfg config) *session {
 			return nil
 		},
 	}
-	return &session{c: c, client: client, tokens: map[string]*tokenEntry{}, limited: map[string]bool{}}
+	return s
 }
 
 func (s *session) do(ctx context.Context, method, target, token, accept string) (*http.Response, error) {
-	if s.requests.Add(1) > maxRequests {
-		return nil, errBudget
-	}
 	req, err := http.NewRequestWithContext(ctx, method, target, nil)
 	if err != nil {
 		return nil, err
+	}
+	host := req.URL.Host
+	if err = s.downError(host); err != nil {
+		return nil, err
+	}
+	if s.requests.Add(1) > maxRequests {
+		return nil, errBudget
 	}
 	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", userAgent)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	return s.client.Do(req)
+	res, err := s.client.Do(req)
+	if err != nil {
+		// A request the scan's own deadline or cancellation cut short says
+		// nothing about the host.
+		if ctx.Err() == nil {
+			s.recordFailure(host, err)
+		}
+		return nil, err
+	}
+	s.markAnswered(host)
+	return res, nil
+}
+
+func (s *session) markAnswered(host string) {
+	s.mu.Lock()
+	s.answered[host] = true
+	delete(s.netFailures, host)
+	delete(s.down, host)
+	s.mu.Unlock()
+}
+
+func (s *session) recordFailure(host string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failure == nil {
+		s.failure = err
+	}
+	// A host that answered earlier is reachable, only slow or flaky: its other
+	// lookups still get their own attempt.
+	if !networkFailure(err) || s.answered[host] {
+		return
+	}
+	s.netFailures[host]++
+	if _, ok := s.down[host]; !ok && s.netFailures[host] >= downAfter {
+		s.down[host] = err
+	}
+}
+
+func (s *session) downError(host string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err, ok := s.down[host]; ok {
+		return &skippedError{cause: err}
+	}
+	return nil
+}
+
+func (s *session) answeredAny() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.answered) > 0
+}
+
+func (s *session) firstFailure() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failure
+}
+
+// networkFailure reports an error of the network itself (a refused, reset or
+// dropped connection, a DNS failure, a timeout), as opposed to a host that
+// answered but not in a way HTTP accepts (a TLS or protocol error, a refused
+// redirect).
+func networkFailure(err error) bool {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 func (s *session) isLimited(registry string) bool {
@@ -418,20 +606,20 @@ func (s *session) lookup(ctx context.Context, ref imageref.Ref) outcome {
 }
 
 func (s *session) failed(ctx context.Context, err error) outcome {
+	var skipped *skippedError
 	switch {
 	case errors.Is(err, errBudget):
 		return transient("Not checked: this scan reached its request limit.")
+	case errors.As(err, &skipped):
+		return transient("Not checked: the registry could not be reached earlier in this scan.")
 	case ctx.Err() != nil:
 		return transient("The scan timed out before this image was checked.")
 	default:
-		reason := "The registry could not be reached."
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
-			reason = "The registry did not answer within the timeout."
+			return transient("The registry did not answer within the timeout.")
 		}
-		out := transient(reason)
-		out.unreachable = err
-		return out
+		return transient("The registry could not be reached.")
 	}
 }
 

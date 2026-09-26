@@ -69,6 +69,9 @@ func (a *Applier) PurgeGone(ctx context.Context, retention time.Duration) error 
 			return err
 		}
 	}
+	if err = purgeRetiredImageUpdates(ctx, tx, cutoff); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

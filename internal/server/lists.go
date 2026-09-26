@@ -18,8 +18,8 @@ func (s *Server) listServices(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.DB().QueryContext(r.Context(), `SELECT s.id,s.host_id,COALESCE(h.name,''),s.name,s.kind,s.stack,s.image,s.tag,s.digest,s.state,s.health,s.restart_policy,s.first_seen,s.last_seen,s.natural_key,
 		COALESCE((SELECT GROUP_CONCAT(mapping, ', ') FROM (SELECT CASE WHEN p.published=1 THEN printf('%d → %d/%s',p.number,p.container_port,p.protocol) ELSE printf('%d/%s',p.container_port,p.protocol) END mapping FROM ports p WHERE p.service_id=s.id ORDER BY p.number,p.container_port,p.protocol)),''),
 		COALESCE((SELECT r.domain FROM routes r WHERE r.resolved_service_id=s.id AND r.state!='gone' ORDER BY LOWER(r.domain),r.id LIMIT 1),''),
-		s.repo_digests
-		FROM services s LEFT JOIN hosts h ON h.id=s.host_id ORDER BY LOWER(COALESCE(h.name,'')),LOWER(s.name),s.id LIMIT ? OFFSET ?`, limit, offset)
+		s.repo_digests,COALESCE(co.kind,'')
+		FROM services s LEFT JOIN hosts h ON h.id=s.host_id LEFT JOIN connectors co ON co.id=s.connector_id ORDER BY LOWER(COALESCE(h.name,'')),LOWER(s.name),s.id LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		http.Error(w, "database error", http.StatusInternalServerError)
 		return
@@ -29,13 +29,13 @@ func (s *Server) listServices(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id int64
 		var hostID sql.NullInt64
-		var host, name, kind, stack, image, tag, digest, state, health, restart, first, last, natural, ports, route, repoDigests string
-		if err = rows.Scan(&id, &hostID, &host, &name, &kind, &stack, &image, &tag, &digest, &state, &health, &restart, &first, &last, &natural, &ports, &route, &repoDigests); err != nil {
+		var host, name, kind, stack, image, tag, digest, state, health, restart, first, last, natural, ports, route, repoDigests, source string
+		if err = rows.Scan(&id, &hostID, &host, &name, &kind, &stack, &image, &tag, &digest, &state, &health, &restart, &first, &last, &natural, &ports, &route, &repoDigests, &source); err != nil {
 			http.Error(w, "database error", http.StatusInternalServerError)
 			return
 		}
 		item := map[string]any{"id": id, "host_id": nullInt(hostID), "host": host, "name": name, "kind": kind, "stack": stack, "image": image, "tag": tag, "digest": digest, "state": state, "health": health, "restart_policy": restart, "first_seen": first, "last_seen": last, "natural_key": natural, "ports": ports, "route": route, "update_status": nil, "update_checked_at": nil}
-		addUpdateStatus(item, kind, state, image, tag, repoDigests, lookups)
+		addUpdateStatus(item, source, kind, state, image, tag, repoDigests, lookups)
 		items = append(items, item)
 	}
 	writeList(w, r, s, "services", items, limit, offset)
@@ -47,10 +47,13 @@ type storedLookup struct {
 	checkedAt string
 }
 
-// imageLookups loads every registry lookup, keyed by image reference. There is
-// one row per distinct reference the containers run, so the set stays small.
+// imageLookups loads the current registry lookups, keyed by image reference.
+// There is one row per distinct reference the containers run, so the set
+// stays small. Retired rows (references no container ran at the last check,
+// or ones the source now skips) are kept only so the change feed does not
+// repeat itself, and never reach the API.
 func (s *Server) imageLookups(r *http.Request) (map[string]storedLookup, error) {
-	rows, err := s.store.DB().QueryContext(r.Context(), `SELECT image_ref,lookup,remote_digest,reason,checked_at FROM image_updates`)
+	rows, err := s.store.DB().QueryContext(r.Context(), `SELECT image_ref,lookup,remote_digest,reason,checked_at FROM image_updates WHERE retired_at IS NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -70,9 +73,11 @@ func (s *Server) imageLookups(r *http.Request) (map[string]storedLookup, error) 
 // addUpdateStatus reports whether a newer image is published for the tag a
 // container runs. Containers whose reference no registry source has checked
 // keep update_status null, which the UI shows as nothing at all, and so do
-// containers that are gone: they run nothing that could be updated.
-func addUpdateStatus(item map[string]any, kind, state, image, tag, repoDigestsJSON string, lookups map[string]storedLookup) {
-	if kind != "container" || state == "gone" || image == "" {
+// containers that are gone (they run nothing that could be updated) and
+// containers another kind of source found, such as an SSH host: they carry
+// no registry digests, so they are never checked (imageref.SourceKind).
+func addUpdateStatus(item map[string]any, source, kind, state, image, tag, repoDigestsJSON string, lookups map[string]storedLookup) {
+	if source != imageref.SourceKind || kind != "container" || state == "gone" || image == "" {
 		return
 	}
 	stored, ok := lookups[imageref.Join(image, tag)]

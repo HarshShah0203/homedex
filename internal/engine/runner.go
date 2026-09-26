@@ -34,8 +34,7 @@ func (r *Runner) Test(ctx context.Context, id int64) error {
 	if e != nil {
 		return e
 	}
-	r.addRouteTargets(ctx, rec.Kind, cfg)
-	r.addImageTargets(ctx, rec.Kind, cfg)
+	cfg = r.AddTargets(ctx, rec.Kind, cfg)
 	tctx, cancel := context.WithTimeout(ctx, r.timeout())
 	defer cancel()
 	return c.Validate(tctx, cfg)
@@ -56,8 +55,7 @@ func (r *Runner) Scan(ctx context.Context, id int64) (int64, int, error) {
 	if !rec.Enabled {
 		return 0, 0, fmt.Errorf("connector is disabled")
 	}
-	r.addRouteTargets(ctx, rec.Kind, cfg)
-	r.addImageTargets(ctx, rec.Kind, cfg)
+	cfg = r.AddTargets(ctx, rec.Kind, cfg)
 	tctx, cancel := context.WithTimeout(ctx, r.timeout())
 	defer cancel()
 	started := time.Now().UTC()
@@ -113,6 +111,20 @@ func (r *Runner) Scan(ctx context.Context, id int64) (int64, int, error) {
 	}
 	return run, changes, nil
 }
+
+// AddTargets adds what the engine supplies to a source's config before it is
+// tested or scanned: route domains for the TLS probe and RDAP, and the
+// deployed image references for image update checks. A source being added is
+// tested with the same targets it will be scanned with once saved.
+func (r *Runner) AddTargets(ctx context.Context, kind string, cfg connectors.Config) connectors.Config {
+	if cfg == nil {
+		cfg = connectors.Config{}
+	}
+	r.addRouteTargets(ctx, kind, cfg)
+	r.addImageTargets(ctx, kind, cfg)
+	return cfg
+}
+
 func (r *Runner) addRouteTargets(ctx context.Context, kind string, cfg connectors.Config) {
 	if kind != "tlsprobe" && kind != "rdap" {
 		return
@@ -157,12 +169,14 @@ func (r *Runner) addRouteTargets(ctx context.Context, kind string, cfg connector
 // addImageTargets hands the registry connector the distinct references the
 // containers still in the inventory run. It replaces any "images" in the
 // stored config: the source checks what is deployed, not an arbitrary list.
-// References come out sorted, so a scan's lookups are deterministic.
+// Only Docker-source containers count (imageCheckedServices): containers an
+// SSH host lists carry no registry digests, so a lookup could never be
+// compared. References come out sorted, so a scan's lookups are deterministic.
 func (r *Runner) addImageTargets(ctx context.Context, kind string, cfg connectors.Config) {
 	if kind != "registry" {
 		return
 	}
-	rows, e := r.Store.DB().QueryContext(ctx, `SELECT DISTINCT image,tag FROM services WHERE state!='gone' AND kind='container' AND image!=''`)
+	rows, e := r.Store.DB().QueryContext(ctx, `SELECT DISTINCT s.image,s.tag FROM services s WHERE `+imageCheckedServices, imageref.SourceKind)
 	if e != nil {
 		return
 	}

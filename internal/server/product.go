@@ -485,7 +485,11 @@ func (s *Server) testUnsavedConnector(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	started := time.Now()
-	if err := connector.Validate(ctx, input.Config); err != nil {
+	// The same targets a saved source is tested and scanned with, such as the
+	// deployed image references for image update checks, so the test contacts
+	// what the source will contact.
+	cfg := s.runner.AddTargets(ctx, input.Kind, input.Config)
+	if err := connector.Validate(ctx, cfg); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"status": "error", "error": err.Error(), "duration_ms": time.Since(started).Milliseconds()})
 		return
 	}

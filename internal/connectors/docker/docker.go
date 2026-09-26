@@ -169,12 +169,21 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 	return snap, nil
 }
 
+// composeBuildLabel is set by `docker compose build` on the images it builds.
+const composeBuildLabel = "com.docker.compose.project"
+
 // imageRepoDigests maps image IDs to the registry digests Docker recorded when
 // each image was pulled, from one image list call (GET /images/json, which
 // carries no image configuration and so no baked-in environment). Update checks
 // compare these against the registry. A daemon or socket proxy that refuses
 // the call (IMAGES=0) only costs that comparison, never the inventory scan, so
 // the error is dropped and the digests stay empty (reported as unknown).
+//
+// Docker's containerd image store (the default in Docker Desktop and new
+// Engine installs) also records a repo digest for a locally built image: its
+// own build digest. Compared with the registry, a local build of a published
+// name would read as an available update. Images Compose built carry its
+// project label, so they are treated as built locally and record none.
 func imageRepoDigests(ctx context.Context, cli API) map[string][]string {
 	images, err := cli.ImageList(ctx, imagetypes.ListOptions{})
 	if err != nil {
@@ -182,7 +191,7 @@ func imageRepoDigests(ctx context.Context, cli API) map[string][]string {
 	}
 	out := make(map[string][]string, len(images))
 	for _, img := range images {
-		if img.ID == "" || len(img.RepoDigests) == 0 {
+		if img.ID == "" || len(img.RepoDigests) == 0 || img.Labels[composeBuildLabel] != "" {
 			continue
 		}
 		digests := make([]string, 0, len(img.RepoDigests))

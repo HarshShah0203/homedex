@@ -68,12 +68,21 @@ func TestImageUpdatesMigrationOverAPopulatedDatabase(t *testing.T) {
 	if err = insert("nginx:alpine", "maybe"); err == nil {
 		t.Fatal("unknown lookup outcome accepted")
 	}
+	if _, err = q.Exec(`INSERT INTO image_updates(image_ref,lookup,checked_at,created_at,updated_at) VALUES('redis:7','unknown',?,?,?)`, now, now, now); err == nil {
+		t.Fatal("lookup without a source accepted")
+	}
+	var retired sql.NullString
+	if err = q.QueryRow(`SELECT retired_at FROM image_updates WHERE image_ref='traefik/whoami:v1.10.0'`).Scan(&retired); err != nil || retired.Valid {
+		t.Fatalf("new lookup retired=%v, %v", retired, err)
+	}
+	// Lookups are derived from the source that made them: deleting the source
+	// deletes them, so no status outlives the check that produced it.
 	if _, err = q.Exec(`DELETE FROM connectors WHERE id=2`); err != nil {
 		t.Fatal(err)
 	}
-	var owner sql.NullInt64
-	if err = q.QueryRow(`SELECT connector_id FROM image_updates WHERE image_ref='traefik/whoami:v1.10.0'`).Scan(&owner); err != nil || owner.Valid {
-		t.Fatalf("deleting the source left owner=%v, %v", owner, err)
+	var left int
+	if err = q.QueryRow(`SELECT COUNT(*) FROM image_updates`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("deleting the source left %d lookups, %v", left, err)
 	}
 	// Reopening an already-migrated database is a no-op.
 	if err = st.Close(); err != nil {
