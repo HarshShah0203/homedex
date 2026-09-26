@@ -146,6 +146,27 @@ export function withDemoUpdates(inventory: Inventory, now: Date = new Date()): I
   };
 }
 
+// The hosted live demo also shows a Proxmox VE source, as a lab with a
+// hypervisor would: one node and two guests on it, each at the address its
+// guest agent or container reported. Like the image update checks it is
+// applied only to the live demo, so the dev-server fallback keeps the plain
+// inventory.
+export function withDemoProxmox(inventory: Inventory, now: Date = new Date()): Inventory {
+  const node: Host = { id: 4, name: 'pve-01', kind: 'proxmox-node', address: '10.0.10.2', os: 'Proxmox VE', arch: '', state: 'active', last_seen: '2m ago', aliases: [], power_state: 'online', parent_id: null, parent: '' };
+  const guests: Host[] = [
+    { id: 5, name: 'home-assistant', kind: 'vm', address: '10.0.30.21', os: '', arch: '', state: 'active', last_seen: '2m ago', aliases: [], power_state: 'running', parent_id: node.id, parent: node.name },
+    { id: 6, name: 'unifi', kind: 'lxc', address: '10.0.10.31', os: '', arch: '', state: 'active', last_seen: '2m ago', aliases: [], power_state: 'running', parent_id: node.id, parent: node.name }
+  ];
+  return {
+    ...inventory,
+    hosts: [...inventory.hosts, node, ...guests],
+    connectors: [
+      ...inventory.connectors,
+      { id: 5, kind: 'proxmox', name: `Proxmox VE · ${node.name}`, enabled: true, schedule_minutes: 15, last_status: 'connected', last_error: '', created_at: isoFrom(now, -30 * DAY_MS), updated_at: isoFrom(now, -2 * 60_000), endpoint: `https://${node.name}.lab.internal:8006 · PVEAuditor token`, found: `${plural(1, 'node')} · ${plural(guests.length, 'guest')}` }
+    ]
+  };
+}
+
 export function createDemoNotificationRules(): NotificationRule[] {
   return [
     { id: 1, name: 'Expiry 14d', kind: 'expiry', threshold_days: 14, filters: {}, channels: ['ntfy'], channel_count: 1, enabled: true, created_at: '', updated_at: '' },

@@ -1,4 +1,4 @@
-import { createDemoInventory, createDemoNotificationRules, createDemoShares, withDemoUpdates } from './demo';
+import { createDemoInventory, createDemoNotificationRules, createDemoShares, withDemoProxmox, withDemoUpdates } from './demo';
 import { demoContextMarkdown, demoExportFile, demoNextFreePort, demoPortConflicts } from './demoApi';
 import { DEMO_MODE, refuseInDemo } from './demoMode';
 import type { Change, Connector, ConnectorInput, ConnectorMutation, ConnectorTest, ContextCounts, ContextExport, Expiry, Host, Inventory, InventoryIssue, InventoryIssueKind, InventoryResource, NotificationRule, NotificationRuleInput, NotificationTest, Port, Route, ScanRun, Service, Share, PortConflict, ManualEntityInput } from './types';
@@ -8,6 +8,13 @@ export type { Inventory } from './types';
 type ListResponse<T> = { items: T[]; total: number };
 const CONTEXT_LIMIT_BYTES = 100 * 1024;
 const CORE_RESOURCES: InventoryResource[] = ['services', 'hosts', 'ports', 'routes', 'changes', 'expiry'];
+
+// The live demo's lab, with its demo-only Proxmox source, which exports and
+// port lookups read so they list the same hosts the pages do. loadInventory
+// also adds the image update badges, which exports do not carry.
+function liveDemoInventory(): Inventory {
+  return withDemoProxmox(createDemoInventory());
+}
 
 class APIError extends Error {
   constructor(public resource: InventoryResource | string, public status: number, message: string) {
@@ -37,7 +44,7 @@ async function list<T>(path: string): Promise<T[]> {
 }
 
 export async function loadInventory(options: { demoOnEmpty?: boolean } = {}): Promise<Inventory> {
-  if (DEMO_MODE) return withDemoUpdates(createDemoInventory());
+  if (DEMO_MODE) return withDemoProxmox(withDemoUpdates(createDemoInventory()));
   const requests = [
     list<Service>('services'), list<Host>('hosts'), list<Port>('ports'), list<Route>('routes'), list<Change>('changes'),
     list<Expiry>('expiry'), list<Connector>('connectors')
@@ -76,7 +83,7 @@ export function createEmptyInventory(): Inventory {
 }
 
 export async function loadContextExport(): Promise<ContextExport> {
-  if (DEMO_MODE) return describeContext(await new Response(demoContextMarkdown(createDemoInventory())).arrayBuffer(), 'homedex-context.md', null);
+  if (DEMO_MODE) return describeContext(await new Response(demoContextMarkdown(liveDemoInventory())).arrayBuffer(), 'homedex-context.md', null);
   const response = await fetch('/api/export/context?include_private=false', { headers: { Accept: 'text/markdown' } });
   if (!response.ok) throw new Error(`The context export API returned ${response.status}.`);
 
@@ -166,7 +173,7 @@ export async function testNotificationRule(id: number): Promise<NotificationTest
 }
 
 export async function loadNextFreePort(hostID: number, start = 1024, end = 65535, protocol = 'tcp'): Promise<number> {
-  if (DEMO_MODE) return demoNextFreePort(createDemoInventory(), hostID, start, end, protocol);
+  if (DEMO_MODE) return demoNextFreePort(liveDemoInventory(), hostID, start, end, protocol);
   const params = new URLSearchParams({ host_id: String(hostID), start: String(start), end: String(end), protocol });
   const response = await requestJSON<{ port: number }>(`/api/ports/next-free?${params}`);
   return response.port;
@@ -187,7 +194,7 @@ export async function revokeShare(id: number): Promise<void> {
 }
 
 export async function loadPortConflicts(): Promise<PortConflict[]> {
-  if (DEMO_MODE) return demoPortConflicts(createDemoInventory());
+  if (DEMO_MODE) return demoPortConflicts(liveDemoInventory());
   const response = await requestJSON<ListResponse<PortConflict>>('/api/ports/conflicts');
   return response.items ?? [];
 }
@@ -201,7 +208,7 @@ export async function patchEntity(type: string, id: number, patch: Record<string
 }
 
 export async function downloadExport(format: 'markdown' | 'json' | 'csv', view?: string): Promise<void> {
-  const { blob, name } = DEMO_MODE ? demoExportFile(createDemoInventory(), format, view) : await fetchExport(format, view);
+  const { blob, name } = DEMO_MODE ? demoExportFile(liveDemoInventory(), format, view) : await fetchExport(format, view);
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
