@@ -42,6 +42,7 @@ func LoadOrCreateSecretBox(dataDir string) (*SecretBox, error) {
 	path := filepath.Join(dataDir, "instance.key")
 	key, err := os.ReadFile(path)
 	if err == nil {
+		restrictKeyFile(path)
 		return NewSecretBox(key)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
@@ -70,6 +71,17 @@ func LoadOrCreateSecretBox(dataDir string) (*SecretBox, error) {
 		return nil, err
 	}
 	return NewSecretBox(key)
+}
+
+// restrictKeyFile puts an existing instance key back to owner-only access.
+// The key decrypts every stored source credential, and some app platforms
+// (Runtipi, for one) make app data world-readable on every start. Best
+// effort: a key file Homedex does not own, or a read-only mount, is left as
+// it is rather than refusing to start.
+func restrictKeyFile(path string) {
+	if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0o077 != 0 {
+		_ = os.Chmod(path, 0o600)
+	}
 }
 
 func (b *SecretBox) Seal(plaintext []byte) ([]byte, error) {

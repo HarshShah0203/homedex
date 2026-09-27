@@ -57,3 +57,32 @@ func TestLoadOrCreateSecretBoxProtectsKeyFile(t *testing.T) {
 		t.Fatalf("key mode=%o, want 600", info.Mode().Perm())
 	}
 }
+
+// A platform that makes app data world-readable on every start (Runtipi runs
+// chmod -R a+rwx) must not leave the key that decrypts source credentials open.
+func TestLoadOrCreateSecretBoxRestrictsAnExistingKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOMEDEX_SECRET", "")
+	first, err := LoadOrCreateSecretBox(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "instance.key")
+	if err = os.Chmod(path, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	again, err := LoadOrCreateSecretBox(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.key != again.key {
+		t.Fatal("reloading the key changed it")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("key mode=%o after reload, want 600", info.Mode().Perm())
+	}
+}
