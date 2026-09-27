@@ -51,6 +51,11 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 			expiring++
 		}
 	}
+	updates, err := s.updatesAvailable(r)
+	if err != nil {
+		http.Error(w, "database error", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"counts":   counts,
 		"services": map[string]int{"total": counts["services"], "running": counts["services_running"]},
@@ -59,6 +64,7 @@ func (s *Server) summary(w http.ResponseWriter, r *http.Request) {
 		"routes":   map[string]int{"total": counts["routes"], "broken": counts["routes_broken"], "resolved": counts["routes"] - counts["routes_broken"]},
 		"expiry":   map[string]int{"total": len(archive.Expiry), "due_within_30_days": expiring},
 		"changes":  map[string]int{"unseen": counts["changes_unseen"]},
+		"updates":  map[string]int{"available": updates},
 	})
 }
 

@@ -77,16 +77,10 @@ func (s *Server) imageLookups(r *http.Request) (map[string]storedLookup, error) 
 // containers another kind of source found, such as an SSH host: they carry
 // no registry digests, so they are never checked (imageref.SourceKind).
 func addUpdateStatus(item map[string]any, source, kind, state, image, tag, repoDigestsJSON string, lookups map[string]storedLookup) {
-	if source != imageref.SourceKind || kind != "container" || state == "gone" || image == "" {
-		return
-	}
-	stored, ok := lookups[imageref.Join(image, tag)]
+	result, stored, ok := updateStatus(source, kind, state, image, tag, repoDigestsJSON, lookups)
 	if !ok {
 		return
 	}
-	var repoDigests []string
-	_ = json.Unmarshal([]byte(repoDigestsJSON), &repoDigests)
-	result := imageref.Compare(image, tag, repoDigests, stored.lookup)
 	item["update_status"] = result.Status
 	item["update_checked_at"] = stored.checkedAt
 	item["update_reason"] = result.Reason
@@ -96,6 +90,48 @@ func addUpdateStatus(item map[string]any, source, kind, state, image, tag, repoD
 	} else {
 		item["latest_digest"] = ""
 	}
+}
+
+// updateStatus is the one place a container's update status is decided, for
+// the services list and the summary count alike; ok is false for containers
+// that carry no status (see addUpdateStatus).
+func updateStatus(source, kind, state, image, tag, repoDigestsJSON string, lookups map[string]storedLookup) (imageref.Result, storedLookup, bool) {
+	if source != imageref.SourceKind || kind != "container" || state == "gone" || image == "" {
+		return imageref.Result{}, storedLookup{}, false
+	}
+	stored, ok := lookups[imageref.Join(image, tag)]
+	if !ok {
+		return imageref.Result{}, storedLookup{}, false
+	}
+	var repoDigests []string
+	_ = json.Unmarshal([]byte(repoDigestsJSON), &repoDigests)
+	return imageref.Compare(image, tag, repoDigests, stored.lookup), stored, true
+}
+
+// updatesAvailable counts the containers a newer image is published for, as
+// the services list would badge them. Without any registry lookups nothing
+// is checked, so the services are not even read.
+func (s *Server) updatesAvailable(r *http.Request) (int, error) {
+	lookups, err := s.imageLookups(r)
+	if err != nil || len(lookups) == 0 {
+		return 0, err
+	}
+	rows, err := s.store.DB().QueryContext(r.Context(), `SELECT s.kind,s.state,s.image,s.tag,s.repo_digests,COALESCE(co.kind,'') FROM services s LEFT JOIN connectors co ON co.id=s.connector_id WHERE s.state!='gone' AND s.image!=''`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	available := 0
+	for rows.Next() {
+		var kind, state, image, tag, repoDigests, source string
+		if err = rows.Scan(&kind, &state, &image, &tag, &repoDigests, &source); err != nil {
+			return 0, err
+		}
+		if result, _, ok := updateStatus(source, kind, state, image, tag, repoDigests, lookups); ok && result.Status == imageref.UpdateAvailable {
+			available++
+		}
+	}
+	return available, rows.Err()
 }
 
 func (s *Server) listHosts(w http.ResponseWriter, r *http.Request) {

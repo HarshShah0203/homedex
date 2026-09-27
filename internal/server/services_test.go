@@ -96,6 +96,30 @@ func TestServiceListReportsImageUpdateStatus(t *testing.T) {
 		}
 		return list.Items
 	}
+	// The summary counts what the list badges, for dashboard widgets.
+	updatesAvailable := func() int {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("summary status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var summary struct {
+			Updates *struct {
+				Available int `json:"available"`
+			} `json:"updates"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &summary); err != nil {
+			t.Fatal(err)
+		}
+		if summary.Updates == nil {
+			t.Fatalf("summary has no updates: %s", rec.Body.String())
+		}
+		return summary.Updates.Available
+	}
+	if got := updatesAvailable(); got != 1 {
+		t.Fatalf("summary updates available = %d, want 1 (only stale)", got)
+	}
 	want := map[string]string{"current": imageref.UpToDate, "stale": imageref.UpdateAvailable, "local": imageref.Unknown, "pinned": imageref.Pinned, "private": imageref.Unknown}
 	for _, item := range fetch() {
 		if item.Name == "unchecked" || item.Name == "ssh-stale" {
@@ -134,6 +158,9 @@ func TestServiceListReportsImageUpdateStatus(t *testing.T) {
 		case item.State == "gone" && item.UpdateStatus != nil:
 			t.Fatalf("gone container %s reported %s", item.Name, *item.UpdateStatus)
 		}
+	}
+	if got := updatesAvailable(); got != 0 {
+		t.Fatalf("summary updates available after recreation = %d, want 0", got)
 	}
 
 	// A reference the next check no longer covers (here, skipped by the
@@ -178,6 +205,9 @@ func TestServiceListReportsImageUpdateStatus(t *testing.T) {
 		if item.UpdateStatus != nil || item.CheckedAt != nil {
 			t.Fatalf("%s still reports %v (checked %v) after the source was deleted", item.Name, item.UpdateStatus, item.CheckedAt)
 		}
+	}
+	if got := updatesAvailable(); got != 0 {
+		t.Fatalf("summary updates available without a source = %d, want 0", got)
 	}
 }
 
