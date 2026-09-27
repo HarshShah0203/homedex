@@ -66,6 +66,7 @@
   let fPveTokenID = $state('');
   let fPveTokenSecret = $state('');
   let fPveTrust = $state('');
+  let fNpmFingerprint = $state('');
 
   function splitLines(value: string): string[] {
     return value.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -77,8 +78,11 @@
         return { url: fUrl.trim(), username: fUsername.trim(), password: fPassword };
       case 'caddy':
         return { url: fUrl.trim() };
-      case 'npm':
-        return { url: fUrl.trim(), email: fEmail.trim(), password: fPassword };
+      case 'npm': {
+        // The pin is sent only when one is pasted.
+        const fingerprint = fNpmFingerprint.trim();
+        return { url: fUrl.trim(), email: fEmail.trim(), password: fPassword, ...(fingerprint ? { fingerprint } : {}) };
+      }
       case 'tlsprobe':
         return { targets: splitLines(fTargets), ...(fTimeout && fTimeout > 0 ? { timeout_seconds: fTimeout } : {}) };
       case 'rdap':
@@ -221,6 +225,7 @@
     fPveTokenID = '';
     fPveTokenSecret = '';
     fPveTrust = '';
+    fNpmFingerprint = '';
   }
 
   function armDelete(id: number) {
@@ -351,7 +356,8 @@
             <label class="field-label">NPM URL <input bind:value={fUrl} placeholder="https://proxy.lab.internal" /></label>
             <label class="field-label">Read-only account <input type="email" bind:value={fEmail} /></label>
             <label class="field-label">Password <input type="password" bind:value={fPassword} /></label>
-            <small class="field-help">Works with Nginx Proxy Manager and NPMplus. Create a user that is not an administrator, with Item Visibility set to All Items and view-only Proxy Hosts and Certificates, that signs in with a password and has no two-factor authentication. NPMplus answers only over https:// (port 81 by default) and its own certificate is self-signed, so set DEFAULT_CERT_ID to a trusted certificate or use the URL of a proxy host with one.</small>
+            <label class="field-label">Certificate fingerprint <input bind:value={fNpmFingerprint} placeholder="Optional; Test connection shows it" autocomplete="off" /></label>
+            <small class="field-help">Works with Nginx Proxy Manager and NPMplus. Create a user that is not an administrator, with Item Visibility set to All Items and view-only Proxy Hosts and Certificates, that signs in with a password and has no two-factor authentication. NPMplus answers only over https:// (port 81 by default) with a self-signed certificate unless DEFAULT_CERT_ID names a trusted one: press Test connection with the fingerprint empty, compare the fingerprint it shows with that of /data/tls/dummycert.pem in the NPMplus container, and paste it. Leave the field empty for a trusted certificate.</small>
           {:else if addKind === 'tlsprobe'}
             <label class="field-label">Targets, one per line <textarea bind:value={fTargets} rows="3" placeholder="example.com:443"></textarea></label>
             <label class="field-label">Timeout, seconds <input type="number" min="1" bind:value={fTimeout} placeholder="Optional" /></label>

@@ -261,7 +261,9 @@ The same source reads Nginx Proxy Manager and its fork [NPMplus](https://github.
 }
 ```
 
-NPMplus serves its admin UI and API only over HTTPS, on port 81 unless `NPM_PORT` says otherwise, so use `https://npmplus:81`. A plain `http://` URL also works: NPMplus answers it with a redirect to `https://` on the same port, which Homedex follows. Either way the certificate must be trusted; see [NPMplus certificate trust](#npmplus-certificate-trust).
+An optional `fingerprint` pins the admin port's certificate by its SHA-256 fingerprint, for a certificate Homedex cannot otherwise verify, such as NPMplus's self-signed one; it needs an `https://` URL.
+
+NPMplus serves its admin UI and API only over HTTPS, on port 81 unless `NPM_PORT` says otherwise, so use `https://npmplus:81`. A plain `http://` URL also works: NPMplus answers it with a redirect to `https://` on the same port, which Homedex follows. Either way the certificate must be trusted or pinned; see [NPMplus certificate trust](#npmplus-certificate-trust).
 
 Homedex logs in with `POST /api/tokens` and tells the two apart from the answer. NPM returns a JWT in the body, which later requests send as a bearer token. NPMplus returns no token: it sets a signed HttpOnly session cookie (`__Host-Http-token`), and later requests send that cookie back, since NPMplus reads no `Authorization` header. The session is kept in memory only and never logged. When a read says the session is no longer accepted, Homedex logs in once more and retries once: NPM answers `401` when its JWT expires after a day; NPMplus answers `403` in releases up to 2026-07-24 and `401` in later versions, when its session expires (after a day, or an hour in later versions) or NPMplus restarted without a fixed `COOKIE_SECRET`. *Test connection* always logs in. It then GETs `/api/nginx/proxy-hosts` and `/api/nginx/certificates`, and never creates or modifies objects. Disabled proxy hosts and disabled NPMplus locations are skipped. An NPMplus host that serves files from a directory (forward scheme `path`) or nothing (`empty`) is listed as a route without an upstream.
 
@@ -282,10 +284,15 @@ NPMplus answers a wrong email or password with 400 (releases up to 2026-07-24) o
 
 ### NPMplus certificate trust
 
-NPMplus serves its admin port with a self-signed certificate that names no host (its subject is `*`), unless `DEFAULT_CERT_ID` names one of its own certificates. Homedex verifies certificates and has no option to skip that, so until then *Test connection* fails with the certificate error and a hint naming `DEFAULT_CERT_ID`. Either:
+NPMplus serves its admin port with a self-signed certificate that names no host (its subject is `*`), unless `DEFAULT_CERT_ID` names one of its own certificates. It generates that certificate as `/data/tls/dummycert.pem` on the data volume the first time it needs it, valid for a thousand years. Homedex verifies certificates and has no option to skip that, so the first *Test connection* fails, before the password is sent, with "the NPM certificate is not trusted" and the SHA-256 fingerprint the server presented. Either:
 
-- set `DEFAULT_CERT_ID` to the ID of a certificate NPMplus manages, such as a Let's Encrypt certificate for `npm.example.com`, and use that name in `url` (it must resolve to NPMplus), or
-- reach the admin UI through an NPMplus proxy host with a trusted certificate that forwards to the admin port with scheme `https`, and use that host's `https://` URL.
+- **pin it**: compare that fingerprint with the one NPMplus's own copy has, from `docker exec npmplus openssl x509 -in /data/tls/dummycert.pem -noout -fingerprint -sha256` (use your container's name), and paste it into the certificate fingerprint field (`fingerprint`). Colons and case do not matter, and openssl's `sha256 Fingerprint=` prefix may stay. The URL must start with `https://`. Homedex then accepts that certificate and no other for the login and every read, whatever host name the URL uses, and still follows redirects only as described above; or
+- set `DEFAULT_CERT_ID` to the ID of a certificate NPMplus manages, such as a Let's Encrypt certificate for `npm.example.com`, and use that name in `url` (it must resolve to NPMplus), with the fingerprint empty; or
+- reach the admin UI through an NPMplus proxy host with a trusted certificate that forwards to the admin port with scheme `https`, and use that host's `https://` URL, with the fingerprint empty.
+
+When a pinned certificate changes, *Test connection* and every scan fail with "the NPM certificate does not match the pinned fingerprint" and the new fingerprint, and nothing is sent until the pin is updated. NPMplus makes a new self-signed certificate only when `/data/tls/dummycert.pem` is missing: on a new data volume, or after `DEFAULT_CERT_ID` named another certificate, since NPMplus then deletes the unused one. Compare the new fingerprint the same way before pinning it. A Let's Encrypt certificate changes on every renewal, so do not pin one; it is trusted without a pin.
+
+Nginx Proxy Manager behind a self-signed certificate of your own is pinned the same way: compare the fingerprint the test shows with that certificate's.
 
 ## nginx (config files)
 

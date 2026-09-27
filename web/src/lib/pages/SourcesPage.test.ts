@@ -78,6 +78,9 @@ describe('SourcesPage add source', () => {
     expect(screen.getByRole('option', { name: 'Nginx Proxy Manager / NPMplus' })).toBeInTheDocument();
     expect(screen.getByLabelText('NPM URL')).toBeInTheDocument();
     expect(screen.getByText(/Works with Nginx Proxy Manager and NPMplus/)).toHaveTextContent('no two-factor authentication');
+    // NPMplus's self-signed admin certificate is pinned like Proxmox's.
+    expect(screen.getByLabelText('Certificate fingerprint')).toHaveAttribute('placeholder', 'Optional; Test connection shows it');
+    expect(screen.getByText(/Works with Nginx Proxy Manager and NPMplus/)).toHaveTextContent('/data/tls/dummycert.pem');
     // RDAP swaps in a domains textarea.
     await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'rdap' } });
     expect(screen.getByLabelText('Domains, one per line').tagName).toBe('TEXTAREA');
@@ -180,6 +183,42 @@ describe('SourcesPage add source', () => {
       await fireEvent.input(screen.getByLabelText('API token secret'), { target: { value: 'secret' } });
     });
     expect(bare.config).toEqual({ url: 'https://pve.lab.example:8006', token_id: 'homedex@pve!inventory', token_secret: 'secret' });
+  });
+
+  it('posts a pasted NPM fingerprint as a pin, and none when the field is empty', async () => {
+    const fingerprint = Array.from({ length: 32 }, (_, i) => (255 - i).toString(16).padStart(2, '0').toUpperCase()).join(':');
+    const pinned = await createBody('npm', async () => {
+      await fireEvent.input(screen.getByLabelText('NPM URL'), { target: { value: ' https://npmplus:81 ' } });
+      await fireEvent.input(screen.getByLabelText('Read-only account'), { target: { value: ' reader@example.com ' } });
+      await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'npm-password' } });
+      await fireEvent.input(screen.getByLabelText('Certificate fingerprint'), { target: { value: ` ${fingerprint}\n` } });
+    });
+    expect(pinned.kind).toBe('npm');
+    expect(pinned.config).toEqual({ url: 'https://npmplus:81', email: 'reader@example.com', password: 'npm-password', fingerprint });
+    cleanup();
+
+    const bare = await createBody('npm', async () => {
+      await fireEvent.input(screen.getByLabelText('NPM URL'), { target: { value: 'http://npm:81' } });
+      await fireEvent.input(screen.getByLabelText('Read-only account'), { target: { value: 'reader@example.com' } });
+      await fireEvent.input(screen.getByLabelText('Password'), { target: { value: 'npm-password' } });
+      await fireEvent.input(screen.getByLabelText('Certificate fingerprint'), { target: { value: '  ' } });
+    });
+    expect(bare.config).toEqual({ url: 'http://npm:81', email: 'reader@example.com', password: 'npm-password' });
+  });
+
+  it('asks to test again after a fingerprint is pasted', async () => {
+    const inventory = createDemoInventory();
+    inventory.source = 'api';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    render(SourcesPage, { props: { inventory } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Add source' }));
+    await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'npm' } });
+    await fireEvent.input(screen.getByLabelText('NPM URL'), { target: { value: 'https://npmplus:81' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Test connection' }));
+    await screen.findByRole('button', { name: 'Connection verified' });
+    await fireEvent.input(screen.getByLabelText('Certificate fingerprint'), { target: { value: 'AB:CD' } });
+    expect(screen.getByRole('button', { name: 'Test connection' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save and scan' })).toBeDisabled();
   });
 
   it('posts image update checks with skipped prefixes on a daily schedule', async () => {

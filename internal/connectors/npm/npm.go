@@ -2,12 +2,13 @@ package npm
 
 import (
 	"context"
-	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/HarshShah0203/homedex/internal/connectors"
 	"github.com/HarshShah0203/homedex/internal/domain"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,10 @@ type config struct {
 	URL      string `json:"url"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// Fingerprint pins the admin port's certificate by its SHA-256, for
+	// NPMplus's self-signed one or any other Homedex cannot verify.
+	Fingerprint string `json:"fingerprint"`
+	pin         []byte
 }
 
 func decode(raw connectors.Config) (config, error) {
@@ -39,11 +44,39 @@ func decode(raw connectors.Config) (config, error) {
 	if x.URL == "" || x.Email == "" || x.Password == "" {
 		e = fmt.Errorf("url, email, and password are required")
 	}
-	return x, e
+	if e != nil {
+		return x, e
+	}
+	if fingerprint := strings.TrimSpace(x.Fingerprint); fingerprint != "" {
+		// Over http:// the password would cross the network in cleartext
+		// before any certificate is seen.
+		if u, err := url.Parse(x.base()); err != nil || u.Scheme != "https" {
+			return x, errors.New("a certificate fingerprint applies only to an https:// URL; NPMplus serves its admin port only over https")
+		}
+		if x.pin, e = connectors.ParseFingerprint(fingerprint); e != nil {
+			return x, e
+		}
+	}
+	return x, nil
 }
 
 func (x config) base() string { return strings.TrimRight(x.URL, "/") }
-func (x config) key() string  { return x.base() + "|" + x.Email }
+
+// key names a cached session. A session is reused only under the same pin.
+func (x config) key() string { return x.base() + "|" + x.Email + "|" + hex.EncodeToString(x.pin) }
+
+// client returns the HTTP client every request of one Validate or Scan uses,
+// and a function to call when they are done. Without a pin it is the
+// connector's shared client, which verifies certificates as Go does. With one
+// it is a copy that accepts only the pinned certificate, for the login and
+// every read alike, and still follows redirects only as the connectors
+// request helpers allow.
+func (c *Connector) client(x config) (*http.Client, func()) {
+	if x.pin == nil {
+		return c.Client, func() {}
+	}
+	return connectors.CertTrust{Label: "NPM", Pin: x.pin}.Client(c.Client)
+}
 
 // session is how the reads after a login authenticate. NPM returns a JWT in
 // the login body and reads send it as a bearer token. NPMplus never puts it
@@ -106,7 +139,7 @@ func parseExpiry(s string) time.Time {
 
 // login posts the credentials and returns the session the answer carries: a
 // token in the body is NPM, no token but the session cookie is NPMplus.
-func (c *Connector) login(ctx context.Context, x config) (session, error) {
+func (c *Connector) login(ctx context.Context, hc *http.Client, x config) (session, error) {
 	var v struct {
 		Token string `json:"token"`
 		// A second factor: NPMplus after 2026-07-24 answers requiresTotp and
@@ -119,7 +152,7 @@ func (c *Connector) login(ctx context.Context, x config) (session, error) {
 	// The body carries the NPM password, so PostJSON follows a redirect with
 	// it only to the same host over HTTPS, and bounds the answer like every
 	// other request.
-	e := connectors.PostJSON(ctx, c.Client, x.base()+"/api/tokens",
+	e := connectors.PostJSON(ctx, hc, x.base()+"/api/tokens",
 		map[string]string{"identity": x.Email, "secret": x.Password}, &v,
 		connectors.WithLabel("NPM token"), connectors.WithResponseCookies(&cookies))
 	if e != nil {
@@ -148,37 +181,51 @@ func (c *Connector) login(ctx context.Context, x config) (session, error) {
 // email or password with 401, NPMplus with 400 (releases up to 2026-07-24) or
 // 403 (later), and NPMplus refuses every password login the same way while
 // OIDC_DISABLE_PASSWORD is true. It answers 429 once one address has failed
-// ten (later five) logins within five minutes, and serves its admin port with
-// a self-signed certificate by default. The upstream's own error text is never
-// included.
+// ten (later five) logins within five minutes. The upstream's own error text
+// is never included.
 func explainLogin(e error) error {
 	var se *connectors.StatusError
-	var untrusted *tls.CertificateVerificationError
 	switch {
 	case errors.As(e, &se) && (se.StatusCode == http.StatusBadRequest || se.StatusCode == http.StatusForbidden):
 		return fmt.Errorf("%w: check the email and password; NPMplus also refuses every password login while OIDC_DISABLE_PASSWORD is true", e)
 	case errors.As(e, &se) && se.StatusCode == http.StatusTooManyRequests:
 		return fmt.Errorf("%w: NPMplus refuses logins from this address for a few minutes after repeated failures; check the email and password, then test again later", e)
-	case errors.As(e, &untrusted):
-		return fmt.Errorf("%w; if this is NPMplus, its admin port uses a self-signed certificate unless DEFAULT_CERT_ID names a trusted one: set it, or point the URL at a proxy host with a trusted certificate that forwards to the admin port", e)
 	}
-	return e
+	return explainUntrusted(e)
+}
+
+// explainUntrusted words a certificate the login or a read refused, with the
+// SHA-256 fingerprint the server presented; any other error is returned as
+// it is. NPMplus serves its admin port with the self-signed certificate it
+// generates in /data/tls/dummycert.pem unless DEFAULT_CERT_ID names one of
+// its own, so without a pin a refusal is expected on the first test. With a
+// pin it means the certificate changed, and no request reaches the server
+// until the pin is updated.
+func explainUntrusted(e error) error {
+	untrusted, ok := connectors.AsUntrustedCert(e, "NPM")
+	switch {
+	case !ok:
+		return e
+	case untrusted.Pinned:
+		return fmt.Errorf("%w. Compare it with the certificate the server should have before pinning it again. A Let's Encrypt certificate, such as one DEFAULT_CERT_ID names, needs no pin and changes on every renewal, so leave the fingerprint empty for one", untrusted)
+	}
+	return fmt.Errorf("%w. Compare it with the certificate the server should have and paste it into the certificate fingerprint field to pin it. NPMplus serves its admin port with the self-signed /data/tls/dummycert.pem unless DEFAULT_CERT_ID names a trusted certificate", untrusted)
 }
 
 // session returns the cached session for x, logging in when there is none.
-func (c *Connector) session(ctx context.Context, x config) (session, error) {
+func (c *Connector) session(ctx context.Context, hc *http.Client, x config) (session, error) {
 	c.mu.Lock()
 	s, ok := c.sessions[x.key()]
 	c.mu.Unlock()
 	if ok {
 		return s, nil
 	}
-	return c.fresh(ctx, x)
+	return c.fresh(ctx, hc, x)
 }
 
 // fresh logs in and caches the session, replacing any cached one.
-func (c *Connector) fresh(ctx context.Context, x config) (session, error) {
-	s, e := c.login(ctx, x)
+func (c *Connector) fresh(ctx context.Context, hc *http.Client, x config) (session, error) {
+	s, e := c.login(ctx, hc, x)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.sessions == nil {
@@ -194,23 +241,23 @@ func (c *Connector) fresh(ctx context.Context, x config) (session, error) {
 
 // get reads path with the cached session. When the answer says the session
 // is no longer accepted it logs in once more and retries once.
-func (c *Connector) get(ctx context.Context, x config, path string, out any) error {
-	s, e := c.session(ctx, x)
+func (c *Connector) get(ctx context.Context, hc *http.Client, x config, path string, out any) error {
+	s, e := c.session(ctx, hc, x)
 	if e != nil {
 		return e
 	}
-	e = connectors.GetJSON(ctx, c.Client, x.base()+path, out, connectors.WithLabel("NPM"), s.auth())
+	e = connectors.GetJSON(ctx, hc, x.base()+path, out, connectors.WithLabel("NPM"), s.auth())
 	var se *connectors.StatusError
 	if errors.As(e, &se) && s.refused(se.StatusCode) {
-		if s, e = c.fresh(ctx, x); e != nil {
+		if s, e = c.fresh(ctx, hc, x); e != nil {
 			return e
 		}
-		e = connectors.GetJSON(ctx, c.Client, x.base()+path, out, connectors.WithLabel("NPM"), s.auth())
+		e = connectors.GetJSON(ctx, hc, x.base()+path, out, connectors.WithLabel("NPM"), s.auth())
 	}
 	if errors.As(e, &se) && se.StatusCode == http.StatusForbidden {
 		return fmt.Errorf("%w: the account needs view access to Proxy Hosts and Certificates", e)
 	}
-	return e
+	return explainUntrusted(e)
 }
 
 // Validate always logs in, so a changed password is tested rather than
@@ -220,7 +267,9 @@ func (c *Connector) Validate(ctx context.Context, raw connectors.Config) error {
 	if e != nil {
 		return e
 	}
-	_, e = c.fresh(ctx, x)
+	hc, done := c.client(x)
+	defer done()
+	_, e = c.fresh(ctx, hc, x)
 	return e
 }
 
@@ -255,6 +304,8 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 	if e != nil {
 		return domain.Snapshot{}, e
 	}
+	hc, done := c.client(x)
+	defer done()
 	var hs []struct {
 		ID            int      `json:"id"`
 		DomainNames   []string `json:"domain_names"`
@@ -272,7 +323,7 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 			Enabled *flag `json:"npmplus_enabled"`
 		} `json:"locations"`
 	}
-	if e = c.get(ctx, x, "/api/nginx/proxy-hosts", &hs); e != nil {
+	if e = c.get(ctx, hc, x, "/api/nginx/proxy-hosts", &hs); e != nil {
 		return domain.Snapshot{}, e
 	}
 	var cs []struct {
@@ -281,7 +332,7 @@ func (c *Connector) Scan(ctx context.Context, raw connectors.Config) (domain.Sna
 		ExpiresOn   string   `json:"expires_on"`
 		Provider    string
 	}
-	_ = c.get(ctx, x, "/api/nginx/certificates", &cs)
+	_ = c.get(ctx, hc, x, "/api/nginx/certificates", &cs)
 	var s domain.Snapshot
 	for _, h := range hs {
 		if !h.Enabled {
