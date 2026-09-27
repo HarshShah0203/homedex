@@ -160,6 +160,7 @@ var credentialOptions = map[string]Option{
 	"WithHeader":      WithHeader("X-API-Key", "unraid-key"),
 	"WithBearerToken": WithBearerToken("tok"),
 	"WithBasicAuth":   WithBasicAuth("admin", "app-secret"),
+	"WithCookie":      WithCookie(&http.Cookie{Name: "__Host-Http-token", Value: "s%3Asession.sig"}),
 }
 
 // redirectTarget is a second server that counts every request reaching it.
@@ -310,7 +311,7 @@ func TestGetJSONWithACredentialRefusesARedirectToAnotherHost(t *testing.T) {
 // credentialSeen answers with the credential the request carried, so a test
 // can tell that it arrived.
 func credentialSeen(w http.ResponseWriter, r *http.Request) {
-	seen := r.Header.Get("X-Api-Key") + r.Header.Get("Authorization")
+	seen := r.Header.Get("X-Api-Key") + r.Header.Get("Authorization") + r.Header.Get("Cookie")
 	if seen == "" {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -322,6 +323,7 @@ var wantCredential = map[string]string{
 	"WithHeader":      "unraid-key",
 	"WithBearerToken": "Bearer tok",
 	"WithBasicAuth":   "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:app-secret")),
+	"WithCookie":      "__Host-Http-token=s%3Asession.sig",
 }
 
 // The usual Traefik setup: the configured URL is http:// and the entrypoint
@@ -466,5 +468,45 @@ func TestPostJSONRejectsAnUnencodableBodyBeforeSending(t *testing.T) {
 	}
 	if hits.Load() != 0 {
 		t.Fatal("request sent despite the encoding error")
+	}
+}
+
+// A login that answers its session as a cookie (NPMplus): only a 2xx answer's
+// cookies are handed back, and those of a same-host upgrade come from the
+// final answer.
+func TestWithResponseCookiesKeepsOnlyASuccessfulAnswersCookies(t *testing.T) {
+	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "__Host-Http-token", Value: "s%3Asession.sig", Path: "/", HttpOnly: true, Secure: true})
+		if r.URL.Path == "/refused" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_, _ = io.WriteString(w, `{"valid":true}`)
+	}))
+	defer api.Close()
+	entry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "from-the-redirect", Value: "x"})
+		http.Redirect(w, r, api.URL+r.URL.Path, http.StatusPermanentRedirect)
+	}))
+	defer entry.Close()
+	client := api.Client()
+	client.Timeout = time.Second
+	for name, call := range requestKinds {
+		for _, start := range []string{api.URL, entry.URL} {
+			var cookies []*http.Cookie
+			var got answer
+			if err := call(context.Background(), client, start+"/api/tokens", &got, WithResponseCookies(&cookies)); err != nil || !got.Valid {
+				t.Fatalf("%s %s: %+v, %v", name, start, got, err)
+			}
+			if len(cookies) != 1 || cookies[0].Name != "__Host-Http-token" || cookies[0].Value != "s%3Asession.sig" {
+				t.Errorf("%s %s: cookies %v, want only the session", name, start, cookies)
+			}
+			cookies = nil
+			err := call(context.Background(), client, start+"/refused", &got, WithResponseCookies(&cookies))
+			var se *StatusError
+			if !errors.As(err, &se) || se.StatusCode != http.StatusForbidden || cookies != nil {
+				t.Errorf("%s %s: refused answer gave %v, cookies %v", name, start, err, cookies)
+			}
+		}
 	}
 }

@@ -73,6 +73,8 @@ type requestOptions struct {
 	// helpers cannot tell an API key header from a harmless one.
 	credential bool
 	requestFns []func(*http.Request)
+	// cookies, when set, receives the cookies a 2xx answer sets.
+	cookies *[]*http.Cookie
 }
 
 // Option customizes a GetJSON, PostJSON or PostForm request.
@@ -110,6 +112,24 @@ func WithBearerToken(token string) Option {
 	return WithHeader("Authorization", "Bearer "+token)
 }
 
+// WithCookie sends c's name and value as a request cookie, such as a session
+// a login set. It is a credential, so the request follows a redirect only as
+// GetJSON describes.
+func WithCookie(c *http.Cookie) Option {
+	return func(o *requestOptions) {
+		o.credential = true
+		o.requestFns = append(o.requestFns, func(r *http.Request) { r.AddCookie(c) })
+	}
+}
+
+// WithResponseCookies stores in *dst the cookies a 2xx answer sets, for a
+// login that hands its session back as a cookie instead of in the body. Only
+// the final answer counts: cookies set by a redirect, or by an answer that
+// fails, are never kept. The cookies are credentials: never log them.
+func WithResponseCookies(dst *[]*http.Cookie) Option {
+	return func(o *requestOptions) { o.cookies = dst }
+}
+
 // GetJSON issues a GET request with the given context and decodes a 2xx JSON
 // response into out. It is the shared, hardened replacement for the connectors'
 // previously duplicated get/load implementations: the response body is read
@@ -117,15 +137,15 @@ func WithBearerToken(token string) Option {
 // to use a client with an explicit timeout (see Client). A non-2xx response
 // yields a *StatusError carrying the status code and the caller's label.
 //
-// With no WithBasicAuth, WithBearerToken or WithHeader option, GetJSON follows
-// redirects as the client does. With any of them it follows a redirect only
-// when the target keeps the original request's host name (the port may change)
-// and the chain has not gone from HTTPS to plain HTTP, and then only if the
-// client's own policy also allows it. Go resends a custom header such as
-// X-API-Key to any host a redirect names, and Authorization to the same host
-// over plain HTTP, so any other redirect comes back as a *StatusError with
-// RedirectRefused set instead. A same-host upgrade from http:// to https://
-// still works, as it did before.
+// With no WithBasicAuth, WithBearerToken, WithHeader or WithCookie option,
+// GetJSON follows redirects as the client does. With any of them it follows a
+// redirect only when the target keeps the original request's host name (the
+// port may change) and the chain has not gone from HTTPS to plain HTTP, and
+// then only if the client's own policy also allows it. Go resends a custom
+// header such as X-API-Key to any host a redirect names, and Authorization or
+// Cookie to the same host over plain HTTP, so any other redirect comes back as
+// a *StatusError with RedirectRefused set instead. A same-host upgrade from
+// http:// to https:// still works, as it did before.
 func GetJSON(ctx context.Context, client *http.Client, rawURL string, out any, opts ...Option) error {
 	return doJSON(ctx, client, http.MethodGet, rawURL, "", nil, out, opts)
 }
@@ -249,6 +269,9 @@ func doJSON(ctx context.Context, client *http.Client, method, rawURL, contentTyp
 	defer res.Body.Close()
 	if res.StatusCode/100 != 2 {
 		return &StatusError{Label: o.label, StatusCode: res.StatusCode, Status: res.Status, RedirectRefused: refused}
+	}
+	if o.cookies != nil {
+		*o.cookies = res.Cookies()
 	}
 	return json.NewDecoder(io.LimitReader(res.Body, MaxResponseBytes)).Decode(out)
 }
