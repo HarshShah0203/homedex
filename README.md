@@ -123,6 +123,8 @@ Docker container environment variables are not represented in Homedex's snapshot
 
 These tools can be complementary. Homedex is not a topology visualizer, monitor, orchestrator, or general-purpose CMDB.
 
+Glance and Homepage can show Homedex's counts (running services, broken routes, what expires within 30 days, available image updates) with their built-in generic widgets and a read-only share token: copy the snippets from [Homedex on your dashboard](docs/DASHBOARDS.md).
+
 ## Deployment facts
 
 - One Go process, one HTTP port (`7377`), one SQLite database.
@@ -170,6 +172,7 @@ Tagged releases are configured through [GoReleaser](.goreleaser.yml) for Linux, 
 
 - [Docker socket proxy](docs/DOCKER_SOCKET_PROXY.md)
 - [Connector configuration](docs/CONNECTORS.md)
+- [Homedex on your dashboard (Glance, Homepage)](docs/DASHBOARDS.md)
 - [Backup, restore, and data ownership](docs/BACKUP_AND_DATA.md)
 - [Frontend dependency security](docs/DEPENDENCY_SECURITY.md)
 - [Deployment security](docs/SECURITY_DEPLOYMENT.md)
