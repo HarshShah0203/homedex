@@ -99,6 +99,10 @@ test('covers the highest-value seeded production workflows', async ({ page }) =>
   await expect(page.getByLabel('Read-only endpoint')).toHaveValue('tcp://docker-socket-proxy:2375');
   await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save and run first scan' })).toBeDisabled();
+  // A lab without Docker leaves the wizard for Sources, where every kind of source is added.
+  await page.getByRole('button', { name: 'Skip, add another source' }).click();
+  await expect(page).toHaveURL(/\/sources$/);
+  await expect(page.getByRole('button', { name: 'Add source' }).first()).toBeVisible();
   expect(apiFailures).toEqual([]);
 
   const shareResponse = await page.request.post('/api/share', {

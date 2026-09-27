@@ -4,6 +4,7 @@
   import { createConnector, loadConnectorScans, scanConnector, testConnector } from './api';
   import type { ConnectorInput, ScanEvent } from './types';
   import { navigate } from './router';
+  import { skipSetup } from './onboarding';
 
   let {
     theme = $bindable<'dark' | 'light'>('light'),
@@ -221,6 +222,12 @@
     }
   }
 
+  async function skipToSources() {
+    skipSetup();
+    await oncomplete();
+    navigate('/sources');
+  }
+
   async function finish() {
     if (!canReview) return;
     await oncomplete();
@@ -257,6 +264,7 @@
           <header class="panel-heading"><div><div class="section-label">Declaration of access</div><h2>Docker metadata, read only</h2></div><code>{dockerConnectorID ? `SRC-${String(dockerConnectorID).padStart(3, '0')}` : 'UNSAVED'}</code></header>
           <div class="access-row allow"><b>✓</b><div><strong>Container identity and state</strong><span>Name, image, stack labels, health, and restart policy.</span></div></div><div class="access-row allow"><b>✓</b><div><strong>Network and port declarations</strong><span>Bindings, container IPs, aliases, and Docker networks.</span></div></div><div class="access-row deny"><b>×</b><div><strong>Environment variables</strong><span><code>Config.Env</code> is never read or stored.</span></div></div><div class="access-row deny"><b>×</b><div><strong>Write operations</strong><span>No start, stop, deploy, edit, or delete endpoints exist.</span></div></div>
           <div class="proxy-path"><div class="section-label">Docker source</div><label class="field-label" for="docker-name">Source name</label><input id="docker-name" bind:value={dockerName} disabled={Boolean(dockerConnectorID)} /><label class="field-label" for="docker-endpoint">Read-only endpoint</label><input id="docker-endpoint" bind:value={dockerEndpoint} disabled={Boolean(dockerConnectorID)} placeholder="tcp://docker-socket-proxy:2375" /><small class="field-help">Compose default. Native binary: unix:///var/run/docker.sock</small><label class="field-label" for="docker-host-name">Host name override</label><input id="docker-host-name" bind:value={dockerHostName} disabled={Boolean(dockerConnectorID)} placeholder="Optional" /><label class="field-label" for="docker-host-address">Host address</label><input id="docker-host-address" bind:value={dockerHostAddress} disabled={Boolean(dockerConnectorID)} placeholder="Optional" />{#if !dockerConnectorID}<div class="row"><button class="quiet-button" disabled={busy} onclick={validateDocker}>{validatedDocker === dockerFingerprint ? 'Connection verified' : 'Test connection'}</button><button class="primary-button" disabled={busy || validatedDocker !== dockerFingerprint} onclick={saveDocker}>{busy ? 'Saving and scanning…' : 'Save and run first scan'}</button></div>{:else}<div class="row"><span class="status ok">Source saved</span><button class="quiet-button" disabled={busy} onclick={runAgain}>{busy ? 'Scanning…' : 'Run scan again'}</button></div>{/if}</div>
+          {#if !dockerConnectorID}<div class="proxy-path setup-skip"><div class="section-label">No Docker here?</div><small class="field-help">Proxmox VE, Tailscale, SSH hosts, reverse proxies and the other sources are added from Sources.</small><div class="row"><button class="quiet-button" disabled={busy} onclick={skipToSources}>Skip, add another source</button></div></div>{/if}
           {#if scanComplete}<div class="proxy-path"><label><input type="checkbox" bind:checked={includeProxy} /> Add Nginx Proxy Manager now (optional)</label>{#if includeProxy && !proxySaved}<label class="field-label" for="proxy-name">Source name</label><input id="proxy-name" bind:value={proxyName} /><label class="field-label" for="proxy-url">NPM URL</label><input id="proxy-url" bind:value={proxyURL} placeholder="https://proxy.lab.internal" /><label class="field-label" for="proxy-email">Read-only account</label><input id="proxy-email" type="email" bind:value={proxyEmail} /><label class="field-label" for="proxy-password">Password</label><input id="proxy-password" type="password" bind:value={proxyPassword} /><div class="row"><button class="quiet-button" disabled={busy} onclick={validateProxy}>{validatedProxy === proxyFingerprint ? 'Proxy verified' : 'Test proxy'}</button><button class="primary-button" disabled={busy || validatedProxy !== proxyFingerprint} onclick={saveProxy}>Save and scan proxy</button></div>{:else if proxySaved}<span class="status ok">Proxy saved and scanned</span>{/if}</div>{/if}
           {#if error}<p class="field-error" role="alert">{error}</p>{/if}
         </section>

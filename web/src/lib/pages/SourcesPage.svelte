@@ -434,7 +434,7 @@
             </div>
           {/each}
         {:else}
-          <div class="empty-register"><strong>{inventory.readOnly ? 'SOURCES HIDDEN IN SHARED VIEW' : 'NO SOURCES DECLARED'}</strong><span>{inventory.readOnly ? 'Connector configuration is outside this share token’s read scope.' : 'Add a read-only connector to begin the inventory.'}</span>{#if !inventory.readOnly}<button class="primary-button" onclick={() => navigate('/setup')}>Add source</button>{/if}</div>
+          <div class="empty-register"><strong>{inventory.readOnly ? 'SOURCES HIDDEN IN SHARED VIEW' : 'NO SOURCES DECLARED'}</strong><span>{inventory.readOnly ? 'Connector configuration is outside this share token’s read scope.' : 'Add a read-only connector to begin the inventory.'}</span>{#if !inventory.readOnly && !adding}<button class="primary-button" onclick={toggleAdd}>Add source</button>{/if}</div>
         {/if}
       </section>
     </div>

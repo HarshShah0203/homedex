@@ -7,6 +7,7 @@
   import CommandPalette from './lib/CommandPalette.svelte';
   import { createEmptyInventory, getSetupStatus, loadInventory, type Inventory } from './lib/api';
   import { DEMO_MODE } from './lib/demoMode';
+  import { setupSkipped, shouldOpenSetup } from './lib/onboarding';
   import { navigate, route } from './lib/router';
   import { relativeTime } from './lib/time';
 
@@ -53,7 +54,7 @@
     }
     await refresh();
     const hasInventory = inventory.services.length + inventory.hosts.length + inventory.ports.length + inventory.routes.length > 0;
-    if (!authRequired && !inventory.readOnly && !hasInventory && !inventory.connectors.length && !inventory.issues.length && pathname !== '/setup') navigate('/setup');
+    if (shouldOpenSetup({ pathname, authRequired, readOnly: inventory.readOnly, hasInventory, connectors: inventory.connectors.length, issues: inventory.issues.length, skipped: setupSkipped() })) navigate('/setup');
   });
 
   $effect(() => {
