@@ -73,6 +73,11 @@ describe('SourcesPage add source', () => {
     // Traefik exposes its URL field.
     await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'traefik' } });
     expect(screen.getByLabelText('Traefik URL')).toBeInTheDocument();
+    // One NPM source covers NPMplus too, and says what account it needs.
+    await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'npm' } });
+    expect(screen.getByRole('option', { name: 'Nginx Proxy Manager / NPMplus' })).toBeInTheDocument();
+    expect(screen.getByLabelText('NPM URL')).toBeInTheDocument();
+    expect(screen.getByText(/Works with Nginx Proxy Manager and NPMplus/)).toHaveTextContent('no two-factor authentication');
     // RDAP swaps in a domains textarea.
     await fireEvent.change(screen.getByLabelText('Source type'), { target: { value: 'rdap' } });
     expect(screen.getByLabelText('Domains, one per line').tagName).toBe('TEXTAREA');

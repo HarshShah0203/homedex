@@ -1,0 +1,79 @@
+[
+  {
+    "id": 3,
+    "created_on": "2026-09-01 10:00:00",
+    "modified_on": "2026-09-01 10:00:00",
+    "owner_user_id": 1,
+    "domain_names": ["docs.example.com"],
+    "forward_scheme": "path",
+    "forward_host": "/var/www/docs/",
+    "forward_port": 84,
+    "certificate_id": 0,
+    "ssl_forced": false,
+    "enabled": true,
+    "npmplus_nginx_online": true,
+    "npmplus_access_list_ids": [],
+    "npmplus_access_list_type": "public",
+    "locations": []
+  },
+  {
+    "id": 5,
+    "created_on": "2026-09-01 10:00:00",
+    "modified_on": "2026-09-01 10:00:00",
+    "owner_user_id": 1,
+    "domain_names": ["old.example.com"],
+    "forward_scheme": "http",
+    "forward_host": "legacy",
+    "forward_port": 8080,
+    "certificate_id": 0,
+    "ssl_forced": false,
+    "enabled": false,
+    "npmplus_nginx_online": true,
+    "npmplus_access_list_ids": [],
+    "npmplus_access_list_type": "public",
+    "locations": []
+  },
+  {
+    "id": 7,
+    "created_on": "2026-09-01 10:00:00",
+    "modified_on": "2026-09-02 10:00:00",
+    "owner_user_id": 1,
+    "domain_names": ["paperless.example.com"],
+    "forward_scheme": "http",
+    "forward_host": "paperless",
+    "forward_port": 8000,
+    "certificate_id": 4,
+    "ssl_forced": true,
+    "enabled": true,
+    "hsts_enabled": true,
+    "npmplus_http3_support": true,
+    "npmplus_nginx_online": true,
+    "npmplus_nginx_err": "",
+    "npmplus_access_list_ids": [],
+    "npmplus_access_list_type": "public",
+    "locations": [
+      {
+        "id": 1,
+        "npmplus_enabled": true,
+        "path": "/socket",
+        "location_type": "",
+        "forward_scheme": "http",
+        "forward_host": "paperless-ws",
+        "forward_port": 8001,
+        "npmplus_access_list_ids": [],
+        "npmplus_access_list_type": "inherit"
+      },
+      {
+        "id": 2,
+        "npmplus_enabled": false,
+        "path": "/legacy",
+        "location_type": "",
+        "forward_scheme": "http",
+        "forward_host": "paperless-old",
+        "forward_port": 8002,
+        "npmplus_access_list_ids": [],
+        "npmplus_access_list_type": "inherit"
+      }
+    ]
+  }
+]

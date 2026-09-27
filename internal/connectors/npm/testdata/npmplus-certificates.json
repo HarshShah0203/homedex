@@ -1,0 +1,16 @@
+[
+  {
+    "id": 4,
+    "created_on": "2026-09-01 10:00:00",
+    "modified_on": "2026-09-01 10:00:00",
+    "owner_user_id": 1,
+    "provider": "letsencrypt",
+    "nice_name": "paperless.example.com",
+    "domain_names": ["paperless.example.com"],
+    "expires_on": "2026-12-01 09:30:00",
+    "npmplus_reuse_key": false,
+    "npmplus_dns_challenge": false,
+    "npmplus_dns_provider": "",
+    "npmplus_propagation_seconds": null
+  }
+]

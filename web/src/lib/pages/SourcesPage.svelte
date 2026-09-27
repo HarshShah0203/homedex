@@ -19,7 +19,7 @@
     { kind: 'docker', label: 'Docker', name: 'Docker', schedule: 15 },
     { kind: 'traefik', label: 'Traefik', name: 'Traefik', schedule: 15 },
     { kind: 'caddy', label: 'Caddy', name: 'Caddy', schedule: 15 },
-    { kind: 'npm', label: 'Nginx Proxy Manager', name: 'Nginx Proxy Manager', schedule: 15 },
+    { kind: 'npm', label: 'Nginx Proxy Manager / NPMplus', name: 'Nginx Proxy Manager', schedule: 15 },
     { kind: 'nginx', label: 'nginx (config files)', name: 'nginx', schedule: 15 },
     { kind: 'ssh', label: 'SSH host', name: 'SSH host', schedule: 15 },
     { kind: 'tailscale', label: 'Tailscale', name: 'Tailscale', schedule: 15 },
@@ -351,6 +351,7 @@
             <label class="field-label">NPM URL <input bind:value={fUrl} placeholder="https://proxy.lab.internal" /></label>
             <label class="field-label">Read-only account <input type="email" bind:value={fEmail} /></label>
             <label class="field-label">Password <input type="password" bind:value={fPassword} /></label>
+            <small class="field-help">Works with Nginx Proxy Manager and NPMplus. Create a user that is not an administrator, with Item Visibility set to All Items and view-only Proxy Hosts and Certificates, that signs in with a password and has no two-factor authentication. NPMplus answers only over https:// (port 81 by default) and its own certificate is self-signed, so set DEFAULT_CERT_ID to a trusted certificate or use the URL of a proxy host with one.</small>
           {:else if addKind === 'tlsprobe'}
             <label class="field-label">Targets, one per line <textarea bind:value={fTargets} rows="3" placeholder="example.com:443"></textarea></label>
             <label class="field-label">Timeout, seconds <input type="number" min="1" bind:value={fTimeout} placeholder="Optional" /></label>

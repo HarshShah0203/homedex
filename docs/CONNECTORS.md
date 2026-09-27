@@ -249,9 +249,9 @@ Homedex issues `GET /config/` and recursively walks host/path matchers, nested s
 
 Caddy's admin API is a management interface capable of changing configuration even though Homedex only sends GET. Keep it on a private network and use Caddy's admin access controls/network policy. Do not expose port `2019` publicly for Homedex.
 
-## Nginx Proxy Manager (NPM)
+## Nginx Proxy Manager (NPM) and NPMplus
 
-Config:
+The same source reads Nginx Proxy Manager and its fork [NPMplus](https://github.com/ZoeyVid/NPMplus). Config:
 
 ```json
 {
@@ -261,9 +261,31 @@ Config:
 }
 ```
 
-Homedex authenticates with `POST /api/tokens`, caches the returned JWT, refreshes it once on `401`, and GETs `/api/nginx/proxy-hosts` plus `/api/nginx/certificates`. It does not create or modify NPM objects. The token POST carries the NPM password, so it never follows a redirect, not even from `http://` to `https://` on the same host; *Test connection* and every scan then fail with "NPM token API returned 308 Permanent Redirect; Homedex does not follow this redirect with credentials, check the URL". Point `url` straight at the NPM API, using `https://` when a proxy in front of NPM redirects plain HTTP. The GETs carry the JWT, so they follow a redirect only to the same host name and never from HTTPS to plain HTTP.
+NPMplus serves its admin UI and API only over HTTPS, on port 81 unless `NPM_PORT` says otherwise, so use `https://npmplus:81`. A plain `http://` URL also works: NPMplus answers it with a redirect to `https://` on the same port, which Homedex follows. Either way the certificate must be trusted; see [NPMplus certificate trust](#npmplus-certificate-trust).
 
-Use a dedicated account and restrict the NPM API network path. NPM role granularity varies by version; verify the effective permissions in your installation rather than assuming the account is enforced read-only.
+Homedex logs in with `POST /api/tokens` and tells the two apart from the answer. NPM returns a JWT in the body, which later requests send as a bearer token. NPMplus returns no token: it sets a signed HttpOnly session cookie (`__Host-Http-token`), and later requests send that cookie back, since NPMplus reads no `Authorization` header. The session is kept in memory only and never logged. When a read says the session is no longer accepted, Homedex logs in once more and retries once: NPM answers `401` when its JWT expires after a day; NPMplus answers `403` in releases up to 2026-07-24 and `401` in later versions, when its session expires (after a day, or an hour in later versions) or NPMplus restarted without a fixed `COOKIE_SECRET`. *Test connection* always logs in. It then GETs `/api/nginx/proxy-hosts` and `/api/nginx/certificates`, and never creates or modifies objects. Disabled proxy hosts and disabled NPMplus locations are skipped. An NPMplus host that serves files from a directory (forward scheme `path`) or nothing (`empty`) is listed as a route without an upstream.
+
+The login POST carries the password, so it follows a redirect only when it stays on the same host name and lands on `https://`: an `http://` URL behind a proxy that upgrades it on the same host keeps working. Any other redirect fails *Test connection* and every scan with "NPM token API returned 308 Permanent Redirect; Homedex does not follow this redirect with credentials, check the URL"; point `url` straight at the API. The reads carry the token or cookie, so they follow a redirect only to the same host name and never from HTTPS to plain HTTP.
+
+### The account
+
+Give Homedex a dedicated user and restrict the network path to the admin port. Homedex signs in with an email and password; NPMplus has no API keys or long-lived tokens to use instead. Under **Users**:
+
+- **Role**: a standard user, not an administrator.
+- **Permissions**: Item Visibility *All Items* (with *Created Items Only* Homedex sees only what that user created), *Proxy Hosts* and *Certificates* view-only, everything else hidden.
+- **Password login**: NPMplus refuses every password login while `OIDC_DISABLE_PASSWORD=true`, and an OIDC-only account cannot be used.
+- **No two-factor authentication**: Homedex cannot enter a TOTP code on every scan, so such an account fails with "this account has two-factor authentication (TOTP) turned on, and Homedex cannot enter a code on every scan; give Homedex its own account without two-factor authentication".
+
+NPM has the same roles and permissions. Check the effective permissions in your installation rather than assuming the account is enforced read-only.
+
+NPMplus answers a wrong email or password with 400 (releases up to 2026-07-24) or 403 (later), and once one address has failed ten logins within five minutes (five in later versions) it answers 429 until the five minutes are over. A scan makes at most one failed login, but repeated *Test connection* clicks with a wrong password reach the limit. An account without view access to proxy hosts fails the scan with "NPM API returned 403 Forbidden: the account needs view access to Proxy Hosts and Certificates".
+
+### NPMplus certificate trust
+
+NPMplus serves its admin port with a self-signed certificate that names no host (its subject is `*`), unless `DEFAULT_CERT_ID` names one of its own certificates. Homedex verifies certificates and has no option to skip that, so until then *Test connection* fails with the certificate error and a hint naming `DEFAULT_CERT_ID`. Either:
+
+- set `DEFAULT_CERT_ID` to the ID of a certificate NPMplus manages, such as a Let's Encrypt certificate for `npm.example.com`, and use that name in `url` (it must resolve to NPMplus), or
+- reach the admin UI through an NPMplus proxy host with a trusted certificate that forwards to the admin port with scheme `https`, and use that host's `https://` URL.
 
 ## nginx (config files)
 

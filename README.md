@@ -56,7 +56,7 @@ HOMEDEX_BIND=0.0.0.0 docker compose up -d
 
 On first start Homedex stores only the password's Argon2id hash, logs that it was set from the environment (never the value), and the wizard then opens at sign-in and continues with your first source. An existing admin is never replaced, so later starts ignore the variable. **App-store installs** (Portainer templates and NAS app catalogs) publish the UI on the LAN straight away: fill in their admin password field. `HOMEDEX_ADMIN_PASSWORD_FILE` reads the password from a mounted secret file instead; see [deployment security](docs/SECURITY_DEPLOYMENT.md#setting-the-admin-password-at-startup). Without either, finish the setup wizard straight away after widening the bind.
 
-Prefer automation? From a checkout, `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager, nginx config files, SSH hosts, Tailscale, Proxmox VE, TLS, RDAP, image update checks, and remote Docker sources. Every one of them can also be added in the UI under **Sources**.
+Prefer automation? From a checkout, `scripts/add-connector.sh --setup docker "Local Docker" docs/examples/connectors/docker-socket-proxy.json` does the same over the API. See [the connector guide](docs/CONNECTORS.md) for Traefik, Caddy, Nginx Proxy Manager (and NPMplus), nginx config files, SSH hosts, Tailscale, Proxmox VE, TLS, RDAP, image update checks, and remote Docker sources. Every one of them can also be added in the UI under **Sources**.
 
 ### Build from source
 
@@ -93,7 +93,7 @@ The hosted [live demo](https://harshshah0203.github.io/homedex/) is different: i
 | Area | Current behavior |
 |---|---|
 | Docker | Discovers host facts, all containers, Compose metadata, image/tag/digest, state/health, ports, networks, aliases, and labels via Unix, TCP/TLS, or SSH endpoints; Podman works through its Docker-compatible API |
-| Reverse proxies | Reads Traefik HTTP API, Caddy admin config, Nginx Proxy Manager proxy-host/certificate APIs, and plain nginx or SWAG config files from a read-only mount (server blocks, includes, `set` variables, upstream groups) |
+| Reverse proxies | Reads Traefik HTTP API, Caddy admin config, Nginx Proxy Manager and NPMplus proxy-host/certificate APIs, and plain nginx or SWAG config files from a read-only mount (server blocks, includes, `set` variables, upstream groups) |
 | SSH hosts | Agentless collector for hosts without an exposed Docker API: container facts via `docker ps` over SSH exec, listening-port facts via `ss` on any Linux host, key-only auth with pinned host-key fingerprints |
 | Tailscale | Read-only device list from the Tailscale API (OAuth client with `devices:core:read`, or an API access token): hostnames, tailnet IPs, MagicDNS names, OS, and last seen; routes to tailnet names resolve to the service on the same machine |
 | Proxmox VE | Read-only API token (PVEAuditor): every node, QEMU VM and LXC container of a cluster or single node, keyed by VMID and shown on the node it runs on, with its power state and the IPs its guest agent or container reports, so routes to a guest's IP resolve to the service on it; templates are skipped, guest configs are never read, and a self-signed certificate is pinned by the fingerprint a failed test shows |
