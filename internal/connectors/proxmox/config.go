@@ -1,11 +1,7 @@
 package proxmox
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
-	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -82,7 +78,7 @@ func decode(raw connectors.Config) (settings, error) {
 	case (fingerprint != "" || ca != "") && !s.https:
 		return settings{}, errors.New("a certificate fingerprint or CA applies only to an https URL")
 	case fingerprint != "":
-		if s.pin, err = parseFingerprint(fingerprint); err != nil {
+		if s.pin, err = connectors.ParseFingerprint(fingerprint); err != nil {
 			return settings{}, err
 		}
 	case ca != "":
@@ -141,27 +137,6 @@ func loopbackHost(host string) bool {
 	return err == nil && a.Unmap().IsLoopback()
 }
 
-// parseFingerprint accepts Proxmox's AA:BB:... form in any case, with or
-// without colons, and with the "SHA256 Fingerprint=" prefix openssl prints.
-func parseFingerprint(s string) ([]byte, error) {
-	s = strings.TrimSpace(s)
-	if i := strings.LastIndex(s, "="); i >= 0 {
-		s = s[i+1:]
-	}
-	s = strings.TrimPrefix(strings.TrimPrefix(s, "SHA256:"), "sha256:")
-	s = strings.Map(func(r rune) rune {
-		if r == ':' || unicode.IsSpace(r) {
-			return -1
-		}
-		return r
-	}, s)
-	pin, err := hex.DecodeString(s)
-	if err != nil || len(pin) != sha256.Size {
-		return nil, errors.New("the fingerprint must be the certificate's SHA-256 fingerprint, 32 hex bytes such as 3A:9F:...; Test connection shows the one the server presents")
-	}
-	return pin, nil
-}
-
 func parseCA(pemText string) (*x509.CertPool, error) {
 	if len(pemText) > maxCABytes {
 		return nil, errors.New("the CA certificate is too long; paste only /etc/pve/pve-root-ca.pem")
@@ -176,57 +151,18 @@ func parseCA(pemText string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-func formatFingerprint(sum []byte) string {
-	parts := make([]string, len(sum))
-	for i, b := range sum {
-		parts[i] = fmt.Sprintf("%02X", b)
+// explainUntrusted adds what to do about a certificate the pin or the CA
+// refused. A node's own certificate is renewed at least every two years; the
+// cluster CA outlives it.
+func explainUntrusted(e *connectors.UntrustedCertError) error {
+	if e.Pinned {
+		return fmt.Errorf("%w. A renewed node certificate changes its fingerprint; pin the cluster CA (/etc/pve/pve-root-ca.pem) to survive renewals", e)
 	}
-	return strings.Join(parts, ":")
+	return fmt.Errorf("%w. If it matches the one under the node's System > Certificates, paste it into the fingerprint field to pin it, or paste the cluster CA from /etc/pve/pve-root-ca.pem", e)
 }
 
-// untrustedError reports a certificate Homedex will not accept, with the
-// fingerprint the server presented so the operator can compare and pin it.
-type untrustedError struct {
-	fingerprint string
-	pinned      bool
-	cause       error
-}
-
-func (e *untrustedError) Error() string {
-	if e.pinned {
-		return fmt.Sprintf("the Proxmox certificate does not match the pinned fingerprint: the server presented %s. A renewed node certificate changes its fingerprint; pin the cluster CA (/etc/pve/pve-root-ca.pem) to survive renewals", e.fingerprint)
-	}
-	return fmt.Sprintf("the Proxmox certificate is not trusted (%v). The server presented the SHA-256 fingerprint %s. If it matches the one under the node's System > Certificates, paste it into the fingerprint field to pin it, or paste the cluster CA from /etc/pve/pve-root-ca.pem", e.cause, e.fingerprint)
-}
-
-// tlsConfig verifies the server itself, in VerifyConnection, which Go runs on
-// every connection including resumed ones: against the pin, or against the
-// configured CA or the system roots for the configured host name. That is
-// why InsecureSkipVerify is set; nothing is ever accepted unverified.
-func tlsConfig(s settings) *tls.Config {
-	return &tls.Config{
-		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: true, // #nosec G402 -- verified in VerifyConnection
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return errors.New("the Proxmox server presented no certificate")
-			}
-			leaf := cs.PeerCertificates[0]
-			sum := sha256.Sum256(leaf.Raw)
-			if s.pin != nil {
-				if subtle.ConstantTimeCompare(sum[:], s.pin) == 1 {
-					return nil
-				}
-				return &untrustedError{fingerprint: formatFingerprint(sum[:]), pinned: true}
-			}
-			opts := x509.VerifyOptions{Roots: s.roots, DNSName: s.host, Intermediates: x509.NewCertPool()}
-			for _, cert := range cs.PeerCertificates[1:] {
-				opts.Intermediates.AddCert(cert)
-			}
-			if _, err := leaf.Verify(opts); err != nil {
-				return &untrustedError{fingerprint: formatFingerprint(sum[:]), cause: err}
-			}
-			return nil
-		},
-	}
+// trust is the certificate the node must present: the pinned one, or one
+// the configured CA or the system roots issued for the configured host.
+func (s settings) trust() connectors.CertTrust {
+	return connectors.CertTrust{Label: "Proxmox", Host: s.host, Pin: s.pin, Roots: s.roots}
 }

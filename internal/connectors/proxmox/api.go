@@ -46,7 +46,7 @@ func newAPI(s settings) (*api, func()) {
 	transport := &http.Transport{
 		Proxy:                 proxy,
 		DialContext:           dialer.DialContext,
-		TLSClientConfig:       tlsConfig(s),
+		TLSClientConfig:       s.trust().TLSConfig(),
 		TLSHandshakeTimeout:   10 * time.Second,
 		MaxIdleConnsPerHost:   defaultGuestWorkers,
 		IdleConnTimeout:       30 * time.Second,
@@ -132,7 +132,7 @@ func (a *api) get(ctx context.Context, path, what string) (json.RawMessage, erro
 	err := connectors.GetJSON(ctx, a.client, a.base+apiPrefix+path, &envelope,
 		connectors.WithHeader("Authorization", a.auth), connectors.WithHeader("Accept", "application/json"))
 	var se *connectors.StatusError
-	var untrusted *untrustedError
+	var untrusted *connectors.UntrustedCertError
 	var ue *url.Error
 	switch {
 	case errors.As(err, &se) && se.StatusCode == http.StatusForbidden:
@@ -140,7 +140,7 @@ func (a *api) get(ctx context.Context, path, what string) (json.RawMessage, erro
 	case errors.As(err, &se):
 		return nil, describeStatus(se.StatusCode, what)
 	case errors.As(err, &untrusted):
-		return nil, untrusted
+		return nil, explainUntrusted(untrusted)
 	case ctx.Err() != nil:
 		return nil, fmt.Errorf("read Proxmox %s: %w", what, ctx.Err())
 	case errors.As(err, &ue):

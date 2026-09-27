@@ -129,7 +129,7 @@ func newPVE(t *testing.T, routes map[string]http.HandlerFunc) *fakePVE {
 
 func fingerprintOf(srv *httptest.Server) string {
 	sum := sha256.Sum256(srv.Certificate().Raw)
-	return formatFingerprint(sum[:])
+	return connectors.FormatFingerprint(sum[:])
 }
 
 func cfg(kv ...string) connectors.Config {
