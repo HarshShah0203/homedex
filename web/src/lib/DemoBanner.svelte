@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { X } from 'lucide-svelte';
-  import { DEMO_REFUSED_EVENT, INSTALL_URL, REPO_URL } from './demoMode';
+  import { DEMO_REFUSED_EVENT, FORK_URL, INSTALL_URL, REPO_URL } from './demoMode';
 
   // Shown only in the static live demo build. The strip says what the visitor
   // is looking at; the notice explains a refused action where they took it.
@@ -27,7 +27,8 @@
   <span class="demo-copy">Every record is made up and nothing you change is saved.</span>
   <span class="demo-links">
     <a href={INSTALL_URL}>Install Homedex</a>
-    <a class="demo-secondary" href={REPO_URL}>Source on GitHub</a>
+    <a href={REPO_URL}>Star on GitHub</a>
+    <a href={FORK_URL}>Fork on GitHub</a>
   </span>
 </div>
 
@@ -123,9 +124,6 @@
     }
     .demo-label {
       white-space: normal;
-    }
-    .demo-secondary {
-      display: none;
     }
     .demo-notice {
       flex-wrap: wrap;

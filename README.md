@@ -9,13 +9,17 @@ Point Homedex at Docker, Proxmox, Tailscale and your reverse proxy to build a se
 **[Live demo](https://harshshah0203.github.io/homedex/)** (fabricated data, nothing to install) · [Quickstart](#quickstart) · [Write a connector](#write-a-connector)
 
 [![CI](https://github.com/HarshShah0203/homedex/actions/workflows/ci.yml/badge.svg)](https://github.com/HarshShah0203/homedex/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/HarshShah0203/homedex)](https://github.com/HarshShah0203/homedex/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+[![Star Homedex](https://img.shields.io/github/stars/HarshShah0203/homedex?style=social)](https://github.com/HarshShah0203/homedex/stargazers)
+[![Fork Homedex](https://img.shields.io/github/forks/HarshShah0203/homedex?style=social)](https://github.com/HarshShah0203/homedex/fork)
 
 </div>
 
 Homedex is **the ledger, not the map**: it answers “what runs where?” from observed infrastructure instead of asking you to maintain another spreadsheet. It does not start, stop, or reconfigure containers.
 
-New connectors ship in tagged releases. To hear about them, choose **Watch > Custom > Releases** at the top of this page.
+Star the repository if this is the inventory you wanted. Fork it to add a read-only connector: [Pi-hole, AdGuard Home, Unraid, TrueNAS, and Kubernetes](https://github.com/HarshShah0203/homedex/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) are already scoped. New connectors ship in tagged releases. To hear about them, choose **Watch > Custom > Releases** at the top of this page.
 
 ![The Homedex services ledger: every service, image, route, host and port, with containers whose tag has a newer build badged](docs/screenshots/services.png)
 

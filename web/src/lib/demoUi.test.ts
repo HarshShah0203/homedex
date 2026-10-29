@@ -28,6 +28,8 @@ describe('live demo screens', () => {
     render(DemoBanner);
     expect(screen.getByText('Live demo with fabricated data')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Install Homedex' })).toHaveAttribute('href', 'https://github.com/HarshShah0203/homedex#quickstart');
+    expect(screen.getByRole('link', { name: 'Star on GitHub' })).toHaveAttribute('href', 'https://github.com/HarshShah0203/homedex');
+    expect(screen.getByRole('link', { name: 'Fork on GitHub' })).toHaveAttribute('href', 'https://github.com/HarshShah0203/homedex/fork');
 
     window.dispatchEvent(new Event(DEMO_REFUSED_EVENT));
     expect(await screen.findByText('Nothing is saved in the live demo.')).toBeInTheDocument();

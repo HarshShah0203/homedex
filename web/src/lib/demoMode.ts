@@ -6,6 +6,7 @@ export const DEMO_MODE = import.meta.env.MODE === 'demo';
 
 export const REPO_URL = 'https://github.com/HarshShah0203/homedex';
 export const INSTALL_URL = `${REPO_URL}#quickstart`;
+export const FORK_URL = `${REPO_URL}/fork`;
 
 export const DEMO_REFUSED_EVENT = 'homedex:demo-refused';
 

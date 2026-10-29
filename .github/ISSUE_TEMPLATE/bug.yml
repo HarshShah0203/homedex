@@ -1,0 +1,26 @@
+name: Bug
+description: Something Homedex does is wrong
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image tag or git revision, and the connector involved.
+      placeholder: ghcr.io/harshshah0203/homedex:0.2.5, Docker connector
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Scrubbed detail
+      description: Paste only what you are willing to make public. Remove hostnames, addresses, tokens, cookies, and certificate material.
+    validations:
+      required: false

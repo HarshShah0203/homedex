@@ -1,0 +1,26 @@
+name: Connector idea
+description: A read-only source Homedex does not scan yet
+labels: ["connector"]
+body:
+  - type: input
+    id: source
+    attributes:
+      label: Source
+      description: The system Homedex should observe.
+      placeholder: Pi-hole v6
+    validations:
+      required: true
+  - type: textarea
+    id: reads
+    attributes:
+      label: What a connector can read
+      description: The read-only API or file, and the least-privilege credential it needs.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This source would only be read. The connector would not start, stop, deploy, or reconfigure anything.
+          required: true
