@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig, type Plugin } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
@@ -9,19 +10,44 @@ import tailwindcss from '@tailwindcss/vite';
 // The live demo's top-level pages, as linked from its navigation and posts.
 const demoPages = ['hosts', 'routes', 'ports', 'changes', 'expiry', 'copy-my-lab', 'sources', 'setup'];
 
+// Link previews (Reddit, Discord, Slack, iMessage) need an absolute image on
+// the same site as the page. raw.githubusercontent.com is often dropped.
+const demoOrigin = process.env.HOMEDEX_DEMO_ORIGIN ?? 'https://harshshah0203.github.io';
+const socialCardPath = new URL('../docs/social-card.png', import.meta.url);
+
 function liveDemo(): Plugin {
+  let base = '/homedex/';
+  const description = 'The inventory your homelab never wrote. Services, ports, routes and cert expiry, discovered from Docker and your reverse proxy. This live demo is fabricated data.';
+  const preview = () => {
+    const root = new URL(base.endsWith('/') ? base : `${base}/`, `${demoOrigin}/`);
+    return { pageUrl: root.href, imageUrl: new URL('social-card.png', root).href };
+  };
   return {
     name: 'homedex-live-demo',
     apply: 'build',
     enforce: 'post',
+    configResolved(config) {
+      base = config.base;
+    },
     transformIndexHtml(html) {
-      const description = 'Homedex builds a searchable inventory of homelab services, hosts, ports, routes, and expiry dates from Docker and your reverse proxy. This live demo runs on fabricated data.';
+      const { pageUrl, imageUrl } = preview();
       return {
         html: html.replace(/<title>[^<]*<\/title>/, '<title>Homedex live demo · What runs where</title>'),
         tags: [
-          { tag: 'meta', attrs: { property: 'og:title', content: 'Homedex live demo' }, injectTo: 'head' },
+          { tag: 'link', attrs: { rel: 'canonical', href: pageUrl }, injectTo: 'head' },
+          { tag: 'meta', attrs: { property: 'og:type', content: 'website' }, injectTo: 'head' },
+          { tag: 'meta', attrs: { property: 'og:site_name', content: 'Homedex' }, injectTo: 'head' },
+          { tag: 'meta', attrs: { property: 'og:url', content: pageUrl }, injectTo: 'head' },
+          { tag: 'meta', attrs: { property: 'og:title', content: 'Homedex · What runs where' }, injectTo: 'head' },
           { tag: 'meta', attrs: { property: 'og:description', content: description }, injectTo: 'head' },
-          { tag: 'meta', attrs: { property: 'og:image', content: 'https://raw.githubusercontent.com/HarshShah0203/homedex/main/docs/social-card.png' }, injectTo: 'head' }
+          { tag: 'meta', attrs: { property: 'og:image', content: imageUrl }, injectTo: 'head' },
+          { tag: 'meta', attrs: { property: 'og:image:width', content: '1280' }, injectTo: 'head' },
+          { tag: 'meta', attrs: { property: 'og:image:height', content: '640' }, injectTo: 'head' },
+          { tag: 'meta', attrs: { property: 'og:image:alt', content: 'Homedex social card: What runs where. A read-only homelab inventory.' }, injectTo: 'head' },
+          { tag: 'meta', attrs: { name: 'twitter:card', content: 'summary_large_image' }, injectTo: 'head' },
+          { tag: 'meta', attrs: { name: 'twitter:title', content: 'Homedex · What runs where' }, injectTo: 'head' },
+          { tag: 'meta', attrs: { name: 'twitter:description', content: description }, injectTo: 'head' },
+          { tag: 'meta', attrs: { name: 'twitter:image', content: imageUrl }, injectTo: 'head' }
         ]
       };
     },
@@ -33,6 +59,7 @@ function liveDemo(): Plugin {
       // Asset URLs in the page are absolute under the base, so copies work.
       const index = bundle['index.html'];
       if (!index || index.type !== 'asset') throw new Error('live demo: index.html was not emitted');
+      this.emitFile({ type: 'asset', fileName: 'social-card.png', source: readFileSync(socialCardPath) });
       this.emitFile({ type: 'asset', fileName: '404.html', source: index.source });
       for (const page of demoPages) {
         this.emitFile({ type: 'asset', fileName: `${page}/index.html`, source: index.source });
