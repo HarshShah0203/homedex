@@ -1,6 +1,6 @@
 # Contributing to Homedex
 
-Homedex accepts focused fixes, tests, documentation, and read-only connectors. Open an issue before undertaking a broad product change so work does not diverge from the deliberately narrow inventory scope.
+Homedex accepts focused fixes, tests, documentation, and read-only connectors. Fork the repository and start from an issue labelled [good first issue](https://github.com/HarshShah0203/homedex/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22). Open an issue before undertaking a broad product change so work does not diverge from the deliberately narrow inventory scope.
 
 ## Ground rules
 
