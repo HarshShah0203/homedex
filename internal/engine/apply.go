@@ -112,6 +112,9 @@ func (a *Applier) Apply(ctx context.Context, connectorID int64, snapshot domain.
 	if err = applyNetworks(ctx, tx, snapshot.Services, serviceIDs); err != nil {
 		return 0, 0, err
 	}
+	if err = applyMounts(ctx, tx, snapshot.Services, serviceIDs); err != nil {
+		return 0, 0, err
+	}
 	n, err = applyPorts(ctx, tx, connectorID, runID, now, snapshot.Ports, hostIDs, serviceIDs)
 	if err != nil {
 		return 0, 0, err
@@ -166,6 +169,99 @@ func (a *Applier) Apply(ctx context.Context, connectorID int64, snapshot domain.
 		}()
 	}
 	return runID, changeCount, nil
+}
+
+type mountRow struct {
+	typeName, source, destination, mode string
+	rw                                  bool
+	propagation                         string
+}
+
+func applyMounts(ctx context.Context, tx *sql.Tx, items []domain.Service, services map[string]int64) error {
+	for _, svc := range items {
+		id, ok := services[svc.NaturalKey()]
+		if !ok {
+			continue
+		}
+
+		incoming := make([]mountRow, 0, len(svc.Mounts))
+		for _, mount := range svc.Mounts {
+			incoming = append(incoming, mountRow{
+				typeName: mount.Type, source: mount.Source,
+				destination: mount.Destination, mode: mount.Mode,
+				rw: mount.RW, propagation: mount.Propagation,
+			})
+		}
+
+		stored, err := loadServiceMounts(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if sameMounts(stored, incoming) {
+			continue
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM service_mounts WHERE service_id=?`, id); err != nil {
+			return err
+		}
+		for _, mount := range incoming {
+			rw := 0
+			if mount.rw {
+				rw = 1
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO service_mounts(service_id,type,source,destination,mode,rw,propagation) VALUES(?,?,?,?,?,?,?)`,
+				id, mount.typeName, mount.source, mount.destination, mount.mode, rw, mount.propagation); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func loadServiceMounts(ctx context.Context, tx *sql.Tx, serviceID int64) ([]mountRow, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT type,source,destination,mode,rw,propagation FROM service_mounts WHERE service_id=?`, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []mountRow
+	for rows.Next() {
+		var mount mountRow
+		var rw int
+		if err := rows.Scan(&mount.typeName, &mount.source, &mount.destination, &mount.mode, &rw, &mount.propagation); err != nil {
+			return nil, err
+		}
+		mount.rw = rw != 0
+		out = append(out, mount)
+	}
+	return out, rows.Err()
+}
+
+func sameMounts(a, b []mountRow) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sortMounts(a)
+	sortMounts(b)
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sortMounts(mounts []mountRow) {
+	sort.Slice(mounts, func(i, j int) bool {
+		if mounts[i].destination != mounts[j].destination {
+			return mounts[i].destination < mounts[j].destination
+		}
+		if mounts[i].source != mounts[j].source {
+			return mounts[i].source < mounts[j].source
+		}
+		return mounts[i].typeName < mounts[j].typeName
+	})
 }
 
 type networkRow struct{ name, ip, aliases string }

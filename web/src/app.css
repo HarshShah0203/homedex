@@ -68,3 +68,90 @@ form.source-editor .form-actions .status{flex-basis:100%;margin-top:2px}
 .image-cell{display:flex;align-items:center;gap:6px}.image-cell .image-ref{min-width:0;overflow:hidden;text-overflow:ellipsis}.update-badge{flex-shrink:0;padding:1px 5px;border:1px solid var(--accent-line);border-radius:4px;background:var(--accent-soft);color:var(--accent);font:600 10px ui-monospace,monospace;letter-spacing:.2px}
 .filter-button.active{border-color:var(--accent-line);background:var(--accent-soft)}.filter-button.active b{color:var(--accent)}
 @media(max-width:900px){.image-cell{flex-wrap:wrap}.image-cell:before{flex-basis:100%}}
+
+/* Expandable service mount details */
+.service-name .service-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.service-name .service-expand strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.service-name .service-expand:hover strong {
+  color: var(--accent);
+}
+.expand-mark {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.service-row:has(.mount-details) {
+  height: auto;
+  grid-template-rows: 44px auto;
+}
+.mount-details {
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding: 12px 16px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  white-space: normal;
+  overflow: visible;
+  font-size: 11px;
+}
+.mount-heading {
+  margin-bottom: 9px;
+  color: var(--muted);
+  font: 650 9px ui-monospace, monospace;
+  letter-spacing: .7px;
+}
+.mount-entry {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr) 18px minmax(0, 1fr) 76px auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 0;
+  border-top: 1px solid var(--subtle);
+}
+.mount-entry code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+  font: 11px ui-monospace, monospace;
+}
+.mount-kind, .mount-access, .mount-mode {
+  color: var(--muted);
+  font: 10px ui-monospace, monospace;
+}
+.mount-arrow {
+  color: var(--faint);
+  text-align: center;
+}
+.mount-error {
+  color: var(--danger, #d66);
+}
+@media(max-width:900px) {
+  .service-row:has(.mount-details) {
+    grid-template-rows: auto auto;
+  }
+  .mount-entry {
+    grid-template-columns: 65px minmax(0, 1fr);
+    gap: 6px 10px;
+  }
+  .mount-entry .mount-arrow {
+    display: none;
+  }
+  .mount-entry code:nth-of-type(2) {
+    grid-column: 2;
+  }
+}

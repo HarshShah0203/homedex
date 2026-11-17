@@ -97,6 +97,7 @@ type Service struct {
 	RestartPolicy string
 	RawLabels     map[string]string
 	Networks      []ServiceNetwork
+	Mounts        []ServiceMount
 	// RepoDigests are the registry digests Docker recorded for the image the
 	// container runs ("nginx@sha256:..."): for a multi-arch image, the index
 	// digest its tag resolved to when pulled. Empty for a locally built image.
@@ -110,6 +111,16 @@ type ServiceNetwork struct {
 	Name    string   `json:"name"`
 	IP      string   `json:"ip"`
 	Aliases []string `json:"aliases"`
+}
+
+// ServiceMount describes a filesystem mount attached to a container.
+type ServiceMount struct {
+	Type        string `json:"type"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Mode        string `json:"mode"`
+	RW          bool   `json:"rw"`
+	Propagation string `json:"propagation"`
 }
 
 func (s Service) NaturalKey() string { return s.Key }

@@ -2,12 +2,14 @@ package store
 
 import (
 	"context"
+
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/HarshShah0203/homedex/internal/domain"
 	"strings"
 	"time"
 )
@@ -57,12 +59,13 @@ type ManualEntityInput struct {
 }
 
 type EntityDetail struct {
-	EntityType   string             `json:"entity_type"`
-	Entity       map[string]any     `json:"entity"`
-	Notes        string             `json:"notes"`
-	Tags         []TagInput         `json:"tags"`
-	CustomFields []CustomFieldInput `json:"custom_fields"`
-	History      []map[string]any   `json:"history"`
+	Mounts       []domain.ServiceMount `json:"mounts"`
+	EntityType   string                `json:"entity_type"`
+	Entity       map[string]any        `json:"entity"`
+	Notes        string                `json:"notes"`
+	Tags         []TagInput            `json:"tags"`
+	CustomFields []CustomFieldInput    `json:"custom_fields"`
+	History      []map[string]any      `json:"history"`
 }
 
 type EntityManager struct{ store *Store }
@@ -272,6 +275,28 @@ func (m *EntityManager) Detail(ctx context.Context, entityType string, id int64)
 		}
 	}
 	detail := EntityDetail{EntityType: typ, Entity: entity, Tags: []TagInput{}, CustomFields: []CustomFieldInput{}, History: []map[string]any{}}
+
+	if typ == "service" {
+		rows, err := m.store.db.QueryContext(ctx, `SELECT type,source,destination,mode,rw,propagation FROM service_mounts WHERE service_id=? ORDER BY destination`, id)
+		if err != nil {
+			return EntityDetail{}, err
+		}
+		for rows.Next() {
+			var mount domain.ServiceMount
+			var rw int
+			if err = rows.Scan(&mount.Type, &mount.Source, &mount.Destination, &mount.Mode, &rw, &mount.Propagation); err != nil {
+				rows.Close()
+				return EntityDetail{}, err
+			}
+			mount.RW = rw != 0
+			detail.Mounts = append(detail.Mounts, mount)
+		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return EntityDetail{}, err
+		}
+		rows.Close()
+	}
 	if base, ok := entity["notes"].(string); ok {
 		detail.Notes = base
 		delete(entity, "notes")

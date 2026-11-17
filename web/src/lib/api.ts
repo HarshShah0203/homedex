@@ -203,6 +203,10 @@ export async function createManualEntity(input: ManualEntityInput): Promise<unkn
   return requestJSON('/api/entities', { method: 'POST', body: input });
 }
 
+export async function getEntity(type: string, id: number): Promise<import('./types').EntityDetail> {
+  return requestJSON(`/api/entities/${type}/${id}`);
+}
+
 export async function patchEntity(type: string, id: number, patch: Record<string, unknown>): Promise<unknown> {
   return requestJSON(`/api/entities/${type}/${id}`, { method: 'PATCH', body: patch });
 }
