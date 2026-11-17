@@ -1,11 +1,40 @@
 <script lang="ts">
-  import type { Inventory } from '../api';
-  import type { Service } from '../types';
+  import { getEntity, type Inventory } from '../api';
+  import type { Service, ServiceMount } from '../types';
   import PageHead from '../PageHead.svelte';
   import { appHref, navigate } from '../router';
   import { plural, relativeTime } from '../time';
 
   let { inventory }: { inventory: Inventory } = $props();
+  let expandedServiceId = $state<number | null>(null);
+  let mountsByService = $state<Record<number, ServiceMount[]>>({});
+  let loadingMountsId = $state<number | null>(null);
+  let mountErrors = $state<Record<number, string>>({});
+
+  async function toggleService(serviceId: number) {
+    if (expandedServiceId === serviceId) {
+      expandedServiceId = null;
+      return;
+    }
+
+    expandedServiceId = serviceId;
+    if (mountsByService[serviceId] !== undefined) return;
+
+    loadingMountsId = serviceId;
+    mountErrors = { ...mountErrors, [serviceId]: '' };
+    try {
+      const detail = await getEntity('service', serviceId);
+      mountsByService = { ...mountsByService, [serviceId]: detail.mounts ?? [] };
+    } catch (error) {
+      mountErrors = {
+        ...mountErrors,
+        [serviceId]: error instanceof Error ? error.message : 'Unable to load mounts'
+      };
+    } finally {
+      if (loadingMountsId === serviceId) loadingMountsId = null;
+    }
+  }
+
   let query = $state('');
   let updatesOnly = $state(false);
   let updatable = $derived(inventory.services.filter((service) => service.update_status === 'update_available').length);
@@ -95,12 +124,43 @@
           {@const image = splitImage(`${service.image}${service.tag ? `:${service.tag}` : ''}`)}
           {@const ports = portParts(service.ports)}
           <article class="service-row" data-component-id={`service-row-${service.name}`}>
-            <div class="service-name" data-label="Service"><i class={`dot ${stateClass(service.state)}`} title={observedLabel(service.state)}></i><strong>{service.name}</strong><small>{service.stack} · SRV-{String(service.id).padStart(3, '0')}</small></div>
+            <div class="service-name" data-label="Service">
+            <i class={`dot ${stateClass(service.state)}`} title={observedLabel(service.state)}></i>
+            <button class="service-expand" aria-expanded={expandedServiceId === service.id} onclick={() => toggleService(service.id)}>
+              <span class="expand-mark">{expandedServiceId === service.id ? '▾' : '▸'}</span>
+              <strong>{service.name}</strong>
+            </button>
+            <small>{service.stack} · SRV-{String(service.id).padStart(3, '0')}</small>
+          </div>
             <div class="cell mono image-cell" data-label="Image" title={imageTitle(service)}><span class="image-ref">{image[0]}<span class="dim">{image[1]}</span></span>{#if service.update_status === 'update_available'}<span class="update-badge">update</span>{/if}</div>
             <div class="cell" data-label="Route" title={`${service.host}:${service.ports.split(' ')[0]}`}>{#if service.route && service.route !== '—'}<span class="route-link">{service.route}</span>{:else}<span class="dim">—</span>{/if}</div>
             <div class="cell" data-label="Host">{service.host}</div>
             <div class="cell mono num" data-label="Ports" title={service.ports}>{ports.shown}{#if ports.more}<span class="port-more">+{ports.more}</span>{/if}</div>
             <div class="cell mono num dim" data-label="Seen">{relativeTime(service.last_seen)}</div>
+          {#if expandedServiceId === service.id}
+            <section class="mount-details" aria-label={`Mounts for ${service.name}`}>
+              {#if loadingMountsId === service.id}
+                <span class="dim">Loading mount information…</span>
+              {:else if mountErrors[service.id]}
+                <span class="mount-error">{mountErrors[service.id]}</span>
+              {:else if mountsByService[service.id]?.length}
+                <div class="mount-heading">CONTAINER MOUNTS · {mountsByService[service.id].length}</div>
+                {#each mountsByService[service.id] as mount}
+                  <div class="mount-entry">
+                    <span class="mount-kind">{mount.type || 'Mount'}</span>
+                    <code title={mount.source}>{mount.source || '—'}</code>
+                    <span class="mount-arrow">→</span>
+                    <code title={mount.destination}>{mount.destination}</code>
+                    <span class="mount-access">{mount.rw ? 'Read/write' : 'Read-only'}</span>
+                    {#if mount.mode}<span class="mount-mode">{mount.mode}</span>{/if}
+                    {#if mount.propagation}<span class="mount-mode">{mount.propagation}</span>{/if}
+                  </div>
+                {/each}
+              {:else}
+                <span class="dim">No mounts detected for this service.</span>
+              {/if}
+            </section>
+          {/if}
           </article>
         {/each}
       </div>

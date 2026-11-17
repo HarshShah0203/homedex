@@ -232,6 +232,7 @@ func (s *Server) getEntity(w http.ResponseWriter, r *http.Request) {
 	if isShareRequest(r) {
 		detail.Notes = ""
 		detail.CustomFields = nil
+		detail.Mounts = nil
 		for _, history := range detail.History {
 			delete(history, "note")
 		}

@@ -289,6 +289,19 @@ func mapContainer(hostKey string, summary types.Container, in types.ContainerJSO
 			addPort(domain.Port{ServiceKey: svc.Key, HostKey: hostKey, Number: p.Int(), ContainerPort: p.Int(), Protocol: p.Proto(), Source: "docker"})
 		}
 	}
+	for _, mount := range in.Mounts {
+		svc.Mounts = append(svc.Mounts, domain.ServiceMount{
+			Type:        string(mount.Type),
+			Source:      mount.Source,
+			Destination: mount.Destination,
+			Mode:        mount.Mode,
+			RW:          mount.RW,
+			Propagation: string(mount.Propagation),
+		})
+	}
+	sort.Slice(svc.Mounts, func(i, j int) bool {
+		return svc.Mounts[i].Destination < svc.Mounts[j].Destination
+	})
 	sort.Slice(svc.Networks, func(i, j int) bool { return svc.Networks[i].Name < svc.Networks[j].Name })
 	sort.Slice(ports, func(i, j int) bool { return ports[i].NaturalKey() < ports[j].NaturalKey() })
 	return svc, ports

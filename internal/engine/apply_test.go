@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -634,5 +635,86 @@ func TestApplyLinksRouteToMatchingCert(t *testing.T) {
 	}
 	if linked.Valid {
 		t.Fatalf("ambiguous cert match must leave cert_id NULL, got %v", linked)
+	}
+}
+
+func TestApplyTracksMountChanges(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	id, err := st.CreateConnector(ctx, "fixture", "Fixture", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(st, nil)
+	snap := domain.Snapshot{
+		Services: []domain.Service{{
+			Key: "svc", Name: "app", Image: "app", Tag: "v1", State: "running",
+			Mounts: []domain.ServiceMount{{
+				Type: "bind", Source: "/srv/media", Destination: "/media",
+				Mode: "rw", RW: true, Propagation: "rprivate",
+			}},
+		}},
+	}
+
+	_, first, err := a.Apply(ctx, id, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != 1 {
+		t.Fatalf("initial discovery changes=%d, want 1", first)
+	}
+
+	_, second, err := a.Apply(ctx, id, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != 0 {
+		t.Fatalf("unchanged scan changes=%d, want 0", second)
+	}
+
+	snap.Services[0].Tag = "v2"
+	snap.Services[0].Mounts[0].Source = "/srv/media-v2"
+
+	runID, third, err := a.Apply(ctx, id, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third != 1 {
+		t.Fatalf("combined service and mount change count=%d, want 1", third)
+	}
+
+	var diff string
+	if err := st.DB().QueryRow(
+		`SELECT diff FROM changes WHERE scan_run_id=? AND entity_type='service'`,
+		runID,
+	).Scan(&diff); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, expected := range []string{
+		`"tag"`,
+		`"mounts"`,
+		`"/srv/media"`,
+		`"/srv/media-v2"`,
+		`"/media"`,
+		`"propagation":"rprivate"`,
+	} {
+		if !strings.Contains(diff, expected) {
+			t.Errorf("change diff does not contain %q: %s", expected, diff)
+		}
+	}
+
+	var rows int
+	if err := st.DB().QueryRow(`SELECT COUNT(*) FROM changes`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("change rows=%d, want 2 (one per changed scan)", rows)
 	}
 }
