@@ -112,9 +112,11 @@ func (a *Applier) Apply(ctx context.Context, connectorID int64, snapshot domain.
 	if err = applyNetworks(ctx, tx, snapshot.Services, serviceIDs); err != nil {
 		return 0, 0, err
 	}
-	if err = applyMounts(ctx, tx, snapshot.Services, serviceIDs); err != nil {
+	n, err = applyMounts(ctx, tx, runID, now, snapshot.Services, serviceIDs)
+	if err != nil {
 		return 0, 0, err
 	}
+	changeCount += n
 	n, err = applyPorts(ctx, tx, connectorID, runID, now, snapshot.Ports, hostIDs, serviceIDs)
 	if err != nil {
 		return 0, 0, err
@@ -177,7 +179,16 @@ type mountRow struct {
 	propagation                         string
 }
 
-func applyMounts(ctx context.Context, tx *sql.Tx, items []domain.Service, services map[string]int64) error {
+func applyMounts(
+	ctx context.Context,
+	tx *sql.Tx,
+	runID int64,
+	now string,
+	items []domain.Service,
+	services map[string]int64,
+) (int, error) {
+	changes := 0
+
 	for _, svc := range items {
 		id, ok := services[svc.NaturalKey()]
 		if !ok {
@@ -187,35 +198,107 @@ func applyMounts(ctx context.Context, tx *sql.Tx, items []domain.Service, servic
 		incoming := make([]mountRow, 0, len(svc.Mounts))
 		for _, mount := range svc.Mounts {
 			incoming = append(incoming, mountRow{
-				typeName: mount.Type, source: mount.Source,
-				destination: mount.Destination, mode: mount.Mode,
-				rw: mount.RW, propagation: mount.Propagation,
+				typeName:    mount.Type,
+				source:      mount.Source,
+				destination: mount.Destination,
+				mode:        mount.Mode,
+				rw:          mount.RW,
+				propagation: mount.Propagation,
 			})
 		}
 
 		stored, err := loadServiceMounts(ctx, tx, id)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if sameMounts(stored, incoming) {
 			continue
 		}
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM service_mounts WHERE service_id=?`, id); err != nil {
-			return err
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM service_mounts WHERE service_id=?`, id); err != nil {
+			return 0, err
 		}
+
 		for _, mount := range incoming {
 			rw := 0
 			if mount.rw {
 				rw = 1
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO service_mounts(service_id,type,source,destination,mode,rw,propagation) VALUES(?,?,?,?,?,?,?)`,
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO service_mounts(service_id,type,source,destination,mode,rw,propagation) VALUES(?,?,?,?,?,?,?)`,
 				id, mount.typeName, mount.source, mount.destination, mount.mode, rw, mount.propagation); err != nil {
-				return err
+				return 0, err
 			}
 		}
+
+		diff := map[string]any{
+			"before": mountRowsForDiff(stored),
+			"after":  mountRowsForDiff(incoming),
+		}
+
+		// Merge mount details into an existing service change from this scan.
+		var changeID int64
+		var rawDiff string
+		err = tx.QueryRowContext(ctx,
+			`SELECT id, diff FROM changes
+			 WHERE scan_run_id=? AND entity_type='service' AND entity_id=?
+			 ORDER BY id DESC LIMIT 1`,
+			runID, id,
+		).Scan(&changeID, &rawDiff)
+
+		if err == nil {
+			existing := map[string]any{}
+			if rawDiff != "" {
+				if err := json.Unmarshal([]byte(rawDiff), &existing); err != nil {
+					return 0, err
+				}
+			}
+			if existing == nil {
+				existing = map[string]any{}
+			}
+			existing["mounts"] = diff
+
+			encoded, err := json.Marshal(existing)
+			if err != nil {
+				return 0, err
+			}
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE changes SET diff=? WHERE id=?`,
+				string(encoded), changeID); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if err != sql.ErrNoRows {
+			return 0, err
+		}
+
+		if err := addChange(
+			ctx, tx, runID, "service", id, "modified",
+			"Service "+svc.Name+" mounts changed", map[string]any{"mounts": diff}, now,
+		); err != nil {
+			return 0, err
+		}
+		changes++
 	}
-	return nil
+
+	return changes, nil
+}
+
+func mountRowsForDiff(mounts []mountRow) []map[string]any {
+	result := make([]map[string]any, 0, len(mounts))
+	for _, mount := range mounts {
+		result = append(result, map[string]any{
+			"type":        mount.typeName,
+			"source":      mount.source,
+			"destination": mount.destination,
+			"mode":        mount.mode,
+			"rw":          mount.rw,
+			"propagation": mount.propagation,
+		})
+	}
+	return result
 }
 
 func loadServiceMounts(ctx context.Context, tx *sql.Tx, serviceID int64) ([]mountRow, error) {
